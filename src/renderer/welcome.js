@@ -15,15 +15,15 @@ function cableField() {
   const jacks = [70, 190, 300, 430, 545, 660, 790, 905, 1020, 1135];
   // [from jack, to jack, colour, sag]; the lowest point of each cable sits at 34 + sag.
   const cables = [
-    [0, 3, '#ff5a3c', 118], [1, 2, '#ffb627', 56], [2, 6, '#36c3d0', 146], [4, 5, '#86d05a', 52],
-    [5, 9, '#a07cff', 128], [7, 8, '#ff6fae', 62], [3, 7, '#4c8dff', 100], [6, 8, '#d9d4c7', 84],
+    [0, 3, 'red', 118], [1, 2, 'amber', 56], [2, 6, 'cyan', 146], [4, 5, 'green', 52],
+    [5, 9, 'violet', 128], [7, 8, 'pink', 62], [3, 7, 'blue', 100], [6, 8, 'bone', 84],
   ];
   let out = '<line x1="0" y1="34" x2="1200" y2="34" class="cf-rule"/>';
   for (const [a, b, color, sag] of cables) {
     const x1 = jacks[a];
     const x2 = jacks[b];
     const mx = (x1 + x2) / 2;
-    out += `<path d="M ${x1} 34 Q ${mx} ${34 + sag * 2} ${x2} 34" stroke="${color}" class="cf-cable"/>`;
+    out += `<path d="M ${x1} 34 Q ${mx} ${34 + sag * 2} ${x2} 34" style="stroke: var(--${color})" class="cf-cable"/>`;
   }
   for (const x of jacks) out += `<circle cx="${x}" cy="34" r="11" class="cf-nut"/><circle cx="${x}" cy="34" r="5" class="cf-hole"/>`;
   svg.innerHTML = out;

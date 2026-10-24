@@ -13,7 +13,7 @@ const { AskpassServer } = require('./askpass');
 const { Store } = require('./store');
 const { RepoWatcher } = require('./watcher');
 const { AvatarService } = require('./avatars');
-const { PROVIDERS, PROVIDER, AiError, buildPrompt, parseMessage, complete, listModels, KeyVault } = require('./ai');
+const { PROVIDERS, PROVIDER, AiError, buildPrompt, buildThemePrompt, parseMessage, complete, listModels, KeyVault } = require('./ai');
 const { Updater } = require('./updater');
 
 // Methods of GitRepo the renderer may call.
@@ -32,7 +32,18 @@ const GIT_METHODS = new Set([
 // Methods whose first argument is an options object that may receive onProgress.
 const PROGRESS_METHODS = new Set(['fetch', 'pull', 'push']);
 
-const STORE_KEYS = new Set(['settings', 'tabs', 'activeTab', 'layout']);
+const STORE_KEYS = new Set(['settings', 'tabs', 'activeTab', 'layout', 'themes']);
+
+/** The last theme the renderer applied, checked, for painting the next launch before the renderer runs. */
+function cachedTheme() {
+  const t = store && store.get('themeCache');
+  if (!t || typeof t !== 'object' || !t.vars || typeof t.vars !== 'object') return null;
+  const vars = {};
+  for (const [k, v] of Object.entries(t.vars).slice(0, 64)) {
+    if (/^--[a-z0-9-]{1,24}$/.test(k) && typeof v === 'string' && /^[#\w(),.\s%-]{1,48}$/.test(v)) vars[k] = v;
+  }
+  return { vars, scheme: t.scheme === 'light' ? 'light' : 'dark' };
+}
 
 let mainWindow = null;
 let store = null;
@@ -111,7 +122,10 @@ function createWindow() {
     minWidth: 980,
     minHeight: 620,
     title: 'GitDonkey',
-    backgroundColor: '#1b1d23',
+    backgroundColor: (() => {
+      const t = cachedTheme();
+      return t && /^#[0-9a-f]{6}$/i.test(t.vars['--case'] || '') ? t.vars['--case'] : '#0b0c0e';
+    })(),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 14, y: 13 },
     show: false,
@@ -192,6 +206,7 @@ function buildMenu() {
             { label: 'Check for Updates…', click: menuCommand('check-updates') },
             { type: 'separator' },
             { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: menuCommand('settings') },
+            { label: 'Themes…', click: menuCommand('themes') },
             { label: 'AI Commit Messages…', click: menuCommand('ai-settings') },
             { type: 'separator' },
             { role: 'services' },
@@ -218,7 +233,7 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Open in Terminal', accelerator: 'CmdOrCtrl+Alt+T', click: menuCommand('terminal') },
         { label: isMac ? 'Show in Finder' : 'Show in Explorer', accelerator: 'CmdOrCtrl+Shift+R', click: menuCommand('reveal') },
-        ...(isMac ? [] : [{ type: 'separator' }, { label: 'Settings…', accelerator: 'Ctrl+,', click: menuCommand('settings') }, { label: 'AI Commit Messages…', click: menuCommand('ai-settings') }, { role: 'quit' }]),
+        ...(isMac ? [] : [{ type: 'separator' }, { label: 'Settings…', accelerator: 'Ctrl+,', click: menuCommand('settings') }, { label: 'Themes…', click: menuCommand('themes') }, { label: 'AI Commit Messages…', click: menuCommand('ai-settings') }, { role: 'quit' }]),
       ],
     },
     {
@@ -475,6 +490,27 @@ function registerIpc() {
       return fail(e);
     }
   });
+  ipcMain.handle('ai:theme', async (_e, { provider, model, baseUrl, description } = {}) => {
+    try {
+      if (typeof description !== 'string' || !description.trim()) throw new AiError('Describe the theme you want first.', 'AI_CONFIG');
+      return ok(await complete({ provider, key: vault.get(provider), model, baseUrl }, buildThemePrompt(description), aiFetch));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  // Themes: the renderer keeps a copy here so the next window opens in it.
+  ipcMain.handle('theme:remember', (_e, t) => {
+    if (!t || typeof t !== 'object') return false;
+    store.set('themeCache', { vars: t.vars, scheme: t.scheme });
+    const c = cachedTheme();
+    if (mainWindow && c && /^#[0-9a-f]{6}$/i.test(c.vars['--case'] || '')) mainWindow.setBackgroundColor(c.vars['--case']);
+    return true;
+  });
+  ipcMain.on('theme:cached', (e) => {
+    e.returnValue = cachedTheme();
+  });
+
   ipcMain.handle('window:setTitle', (_e, title) => {
     if (mainWindow) mainWindow.setTitle(String(title || 'GitDonkey'));
     return true;

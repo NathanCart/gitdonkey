@@ -6,12 +6,17 @@
 // segments drawn from the previous row (column `from`) into this row (column
 // `to`). Lanes keep their column for their whole life, so colors are stable.
 
-// The patch-cable palette (matches the --red … --bone tokens in styles.css),
+// The patch-cable palette (the --red … --bone tokens of the current theme),
 // alternating warm and cool so neighbouring lanes never blur together.
-export const PALETTE = [
+let PALETTE = [
   '#ffb627', '#36c3d0', '#ff5a3c', '#a07cff', '#86d05a',
   '#ff6fae', '#4c8dff', '#ff8a3d', '#2fd4a3', '#d9d4c7',
 ];
+
+/** Use a theme's cable colours for lanes laid out from now on. */
+export function setPalette(colors) {
+  if (Array.isArray(colors) && colors.length) PALETTE = [...colors];
+}
 
 export function colorFor(col) {
   return PALETTE[col % PALETTE.length];

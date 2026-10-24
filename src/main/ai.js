@@ -81,6 +81,32 @@ function buildPrompt({ diff, files = [], branch = null, recent = [], instruction
   return { system, user: lines.join('\n\n') };
 }
 
+// The colours a theme sets, in the order the theme builder shows them
+// (src/renderer/lib/themes.js has the same list).
+const THEME_KEYS = [
+  'case', 'panel', 'panel-2', 'panel-3', 'panel-4', 'seam', 'rule', 'rule-2',
+  'legend', 'legend-2', 'legend-3', 'keycap', 'keycap-hover', 'keycap-ink',
+  'red', 'amber', 'cyan', 'green', 'violet', 'pink', 'blue', 'orange', 'teal', 'bone',
+];
+
+/** A prompt for a whole colour theme from a description like "sunset". */
+function buildThemePrompt(description) {
+  const system = [
+    'You design colour themes for GitDonkey, a desktop Git client styled like a modular synth: matte panels on thin seams, printed legends, and coloured patch cables for branches.',
+    'Reply with JSON only, no prose and no code fences: {"name": "...", "colors": {...}} with every key below as a #rrggbb colour.',
+    '- case: the deepest background (commit graph, input fields).',
+    '- panel, panel-2, panel-3, panel-4: surfaces in small steps away from case towards the legend colour (panel: sidebars; panel-2: raised headers, menus, toasts; panel-3: hover; panel-4: pressed).',
+    '- seam: the 1px gaps between modules (darker than case on a dark theme). rule and rule-2: borders, rule-2 stronger.',
+    '- legend: main text. legend-2: secondary text. legend-3: muted hints.',
+    '- keycap: primary buttons and highlights. keycap-hover: keycap when hovered. keycap-ink: text on keycap and on cable colours.',
+    '- red (deletions, errors), amber (current branch, focus, selection), cyan (info), green (additions), violet, pink, blue, orange, teal, bone: patch cables, also used for graph lanes and syntax highlighting. Make them ten clearly different hues.',
+    'Contrast: legend on panel at least 7:1; legend-2 and legend-3 on panel-2 at least 4.5:1; keycap-ink on keycap at least 4.5:1; every cable at least 3:1 against case and panel-2.',
+    'Choose a light or dark base to suit the description. Put the mood into the backgrounds, the keycap and the cables, but keep red reddish, green greenish and amber warm so diffs and status still read.',
+    'name: a short name for the theme, two or three words, in title case.',
+  ].join('\n');
+  return { system, user: `Theme: ${String(description).trim().slice(0, 300)}` };
+}
+
 /** Clean a model's reply into { summary, description }. */
 function parseMessage(text) {
   let t = String(text || '').replace(/\r\n?/g, '\n').trim();
@@ -285,4 +311,4 @@ class KeyVault {
   }
 }
 
-module.exports = { PROVIDERS, PROVIDER, AiError, condenseDiff, buildPrompt, parseMessage, complete, listModels, KeyVault };
+module.exports = { PROVIDERS, PROVIDER, AiError, condenseDiff, buildPrompt, buildThemePrompt, THEME_KEYS, parseMessage, complete, listModels, KeyVault };

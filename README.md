@@ -40,6 +40,16 @@ The builds aren't code-signed, which rules out the usual Squirrel / electron-upd
 
 When a remote needs a login, GitDonkey asks for it in its own dialog: username and token for HTTPS, passphrase for SSH keys, and a fingerprint check for new SSH hosts. Git then saves the login in your system keychain (macOS Keychain, Windows Credential Manager), so you are only asked once. If the [GitHub CLI](https://cli.github.com/) is installed and logged in (`gh auth login`), GitHub remotes sign in automatically.
 
+## Themes
+
+**Themes…** (in the GitDonkey menu on macOS, the File menu on Windows, or Settings) has 21 built-in themes: GitDonkey's own Patch Bay, Studio Paper, Eurorack Silver, Hay Bale, Oscilloscope, Amber CRT, Tape Deck, Neon Arcade, Deep Sea and High Contrast, plus Nord, Dracula, Solarized, Gruvbox, Monokai, Catppuccin, Tokyo Night and Rosé Pine. Click one and the whole window changes, graph lanes included.
+
+**New theme…** opens the theme builder beside the window, so you see every change on the real app as you make it. Each of the 24 colours has a picker and a hex field; **Shades from Case + Legend** works out the panels, rules and text shades from your background and text colours; and a readability check lists any text or cable that's too faint, with **Fix readability** to nudge just those colours until they pass (WCAG AA for text, 3:1 for cables).
+
+If you've set up AI commit messages, describe a theme (“sunset”, “forest at dawn”, “1980s arcade”) and press **Generate**: the same provider and key design all 24 colours, GitDonkey fixes anything unreadable, and you tweak and save. Only your description is sent.
+
+**Copy theme code** gives you a short bit of text to share; anyone can paste it into **Themes → Import…**.
+
 ## AI commit messages
 
 Optional, and off until you set it up. Press **Generate** in the commit box (or open **AI Commit Messages…** from the GitDonkey menu, or Settings) and pick a provider:
@@ -84,6 +94,7 @@ npm run brand      # regenerate the icon, logo and brand sheet
 - **Undo / redo** for commits, checkouts, branch create/delete/rename, resets, tags and interactive rebases.
 - **Author avatars** from GitHub and Gravatar (switch off in Settings).
 - **Tabs** for multiple repositories, recent repositories, clone, init, drag a folder in to open it, and auto-refresh when files change.
+- **Themes**: 21 built in, a live theme builder with a readability check, AI-designed themes from a description, and shareable theme codes.
 - **Updates**: a notice when a new release is out, with its notes, and a one-click download and restart (switch off in Settings).
 
 ## Keyboard
@@ -107,8 +118,8 @@ On Windows, read Ctrl for ⌘, Alt for ⌥ and Shift for ⇧.
 ## Tests
 
 ```bash
-npm test          # unit tests against real temporary repositories (backend, graph, patches, conflicts, avatars, sign-in, updates)
-npm run test:e2e  # Playwright run of the real app against a demo repo and a bare "origin", then the update flow against a fake release feed
+npm test          # unit tests against real temporary repositories (backend, graph, patches, conflicts, avatars, sign-in, updates, themes)
+npm run test:e2e  # Playwright run of the real app against a demo repo and a bare "origin", then the update flow against a fake release feed, then themes (with a fake AI endpoint)
 ```
 
 The update run serves a release one major version ahead from 127.0.0.1. On macOS it goes on to download a real DMG, swap a stand-in app bundle and reopen it; that last check builds a tiny launcher with `cc` from the Xcode Command Line Tools and is skipped without them.

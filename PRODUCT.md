@@ -43,6 +43,7 @@ Familiar GitKraken layout and interaction model (tabs, toolbar, left refs sideba
 - Diff viewer (unified and split, syntax highlighting, image diffs), file history, blame, file view.
 - Undo/redo for commit, checkout, branch create/delete, reset, tag create.
 - Clone, init, open (dialog or drag-and-drop), recent repositories, auto-refresh on file changes.
+- Themes: 21 built in (Patch Bay is the default; the rest include light themes and well-known palettes like Nord, Dracula, Solarized, Gruvbox, Catppuccin), chosen in Themes… with a live preview. A theme builder edits all 24 base colours beside the live app, checks readability (WCAG AA for text, 3:1 for cables) and can fix it, and can design a theme from a description with the AI commit message provider. Themes share as a JSON theme code. Every colour in the app comes from theme tokens; hover steps, shadows and tints are derived.
 - Update notices (on by default, off switch in Settings, manual Check for Updates… in the menu): the latest GitHub release is checked at launch and every six hours; the notice shows the version and release notes with Update, Later and Skip this version. The builds are not code-signed, so instead of Squirrel/electron-updater GitDonkey downloads the installer itself (checked against GitHub's SHA-256) and installs it: on macOS it swaps the app bundle and relaunches (an in-app download carries no quarantine flag, so no Open Anyway), falling back to opening the DMG when it can't write to its folder; on Windows it runs the NSIS installer silently.
 
 ## Brand Commitments

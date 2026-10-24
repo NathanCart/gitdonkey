@@ -74,7 +74,8 @@ export function logoMark(size = 32, { mono = false } = {}) {
   return svg;
 }
 
-const AVATAR_HUES = ['#ff5a3c', '#ffb627', '#36c3d0', '#86d05a', '#a07cff', '#ff6fae', '#4c8dff', '#ff8a3d', '#2fd4a3', '#d9d4c7'];
+// The theme's cable colours, so author colours follow the theme.
+const AVATAR_HUES = ['red', 'amber', 'cyan', 'green', 'violet', 'pink', 'blue', 'orange', 'teal', 'bone'].map((k) => `var(--${k})`);
 
 export function authorColor(key) {
   return AVATAR_HUES[hashString(String(key || '').toLowerCase()) % AVATAR_HUES.length];

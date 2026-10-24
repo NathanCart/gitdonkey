@@ -4,6 +4,7 @@ import { h, icon, clear, legend, kbd, logoMark } from './dom.js';
 import { openModal, formDialog, confirmDialog, field, toast } from './ui.js';
 import { git, invoke, on, kb, sep, isAbsolutePath } from './api.js';
 import { guessRepoName, shortHash, relativeTime, pluralize } from './lib/util.js';
+import { themesDialog } from './themes-ui.js';
 
 const pickFolder = (current) => invoke('dialog:pickFolder', { defaultPath: current || undefined, title: 'Choose a folder' });
 
@@ -129,6 +130,7 @@ export async function identityDialog(app, { required = false } = {}) {
 export async function settingsDialog(app) {
   const id = app.repo ? await git(app.repo, 'identity').catch(() => ({})) : {};
   const s = app.settings;
+  const themeHint = h('div', { class: 'field-hint' }, app.theme().name);
   const values = await formDialog({
     title: 'Settings',
     okLabel: 'Save',
@@ -151,9 +153,15 @@ export async function settingsDialog(app) {
       { name: 'checkUpdates', type: 'checkbox', label: 'Check for updates automatically', value: s.checkUpdates !== false, hint: `You have GitDonkey ${app.info.version}. It looks for a new release on GitHub at launch and every few hours.` },
       { name: 'confirmDiscard', type: 'checkbox', label: 'Ask before discarding changes', value: s.confirmDiscard !== false },
     ],
-    extra: h('div', { class: 'settings-ai' },
-      h('div', null, h('div', { class: 'field-label' }, 'AI commit messages'), h('div', { class: 'field-hint' }, app.aiConfig() ? app.aiConfig().label : 'Off')),
-      h('button', { type: 'button', class: 'btn btn-small', onClick: () => aiSettingsDialog(app) }, app.aiConfig() ? 'Change…' : 'Set up…')),
+    extra: h('div', { class: 'settings-extra' },
+      h('div', { class: 'settings-ai' },
+        h('div', null, h('div', { class: 'field-label' }, 'Theme'), themeHint),
+        h('button', { type: 'button', class: 'btn btn-small', dataset: { action: 'themes' }, onClick: () => themesDialog(app).then(() => {
+          themeHint.textContent = app.theme().name;
+        }) }, 'Change…')),
+      h('div', { class: 'settings-ai' },
+        h('div', null, h('div', { class: 'field-label' }, 'AI commit messages'), h('div', { class: 'field-hint' }, app.aiConfig() ? app.aiConfig().label : 'Off')),
+        h('button', { type: 'button', class: 'btn btn-small', onClick: () => aiSettingsDialog(app) }, app.aiConfig() ? 'Change…' : 'Set up…'))),
     validate: (v) => (app.repo && v.email && !/^[^\s@]+@[^\s@]+$/.test(v.email.trim()) ? 'Enter a valid email address.' : null),
   });
   if (!values) return;

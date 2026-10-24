@@ -14,10 +14,13 @@ import { renderWelcome } from './welcome.js';
 import * as dialogs from './dialogs.js';
 import { setAvatarsEnabled, onAvatarChange } from './avatars.js';
 import { Updates } from './updates.js';
+import { applyTheme } from './theme.js';
+import { themesDialog } from './themes-ui.js';
+import { findTheme, DEFAULT_THEME } from './lib/themes.js';
 
 const PAGE = 1500;
 const DEFAULT_SETTINGS = {
-  pullMode: 'merge', autoFetch: 0, diffMode: 'unified', diffContext: 'hunks', ignoreWhitespace: false, fileView: 'path', confirmDiscard: true, avatars: true, checkUpdates: true,
+  pullMode: 'merge', autoFetch: 0, diffMode: 'unified', diffContext: 'hunks', ignoreWhitespace: false, fileView: 'path', confirmDiscard: true, avatars: true, checkUpdates: true, theme: DEFAULT_THEME,
 };
 const DEFAULT_LAYOUT = { sidebar: 248, panel: 392, refs: 176, graphMax: 340, sidebarHidden: false, panelHidden: false };
 
@@ -120,6 +123,9 @@ class App {
     document.body.classList.toggle('mac', this.info.platform === 'darwin');
     Object.assign(this.settings, (await invoke('store:get', 'settings')) || {});
     Object.assign(this.layout, (await invoke('store:get', 'layout')) || {});
+    const custom = await invoke('store:get', 'themes').catch(() => null);
+    this.customThemes = Array.isArray(custom) ? custom.filter((t) => t && t.id && t.colors) : [];
+    applyTheme(this.theme());
     setAvatarsEnabled(this.settings.avatars !== false);
     onAvatarChange(() => this.graph && this.graph.draw());
     this.aiProviders = await invoke('ai:providers').catch(() => []);
@@ -181,6 +187,34 @@ class App {
 
   saveLayout() {
     invoke('store:set', 'layout', this.layout);
+  }
+
+  // ------------------------------------------------------------ themes
+
+  /** A theme by id (built in or one of the user's), the chosen one by default. */
+  theme(id = this.settings.theme) {
+    return findTheme(id, this.customThemes);
+  }
+
+  /** Paint the window in a theme. With `save: false` it's only a preview and the choice stays as it was. */
+  useTheme(id, { save = true } = {}) {
+    const t = this.theme(id);
+    applyTheme(t, { remember: save });
+    if (save) this.setSetting('theme', t.id, { silent: true });
+    this.recolor();
+  }
+
+  /** Lay the graph out again so its lanes take the theme's cable colours. */
+  recolor() {
+    if (this.tab && this.data) {
+      this.buildGraph();
+      this.renderAll({ skipDetail: true });
+    }
+  }
+
+  saveCustomThemes(list) {
+    this.customThemes = list;
+    invoke('store:set', 'themes', list);
   }
 
   setSetting(key, value, { silent = false } = {}) {
@@ -1870,6 +1904,7 @@ class App {
       case 'identity': return dialogs.identityDialog(this);
       case 'settings': return dialogs.settingsDialog(this);
       case 'ai-settings': return dialogs.aiSettingsDialog(this);
+      case 'themes': return themesDialog(this);
       case 'shortcuts': return dialogs.shortcutsDialog();
       case 'refresh': return this.refresh();
       case 'check-updates': return this.updates.check();
