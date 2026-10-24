@@ -1,0 +1,130 @@
+{
+  "title": "Choose GitDonkey's visual world",
+  "question": "The roll assigned Patch Bay. Keep it, take an alternate, or re-roll.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Patch Bay",
+      "kicker": "THE ROLL",
+      "lineage": "Eurorack modular synthesizers: anodized panels, screen-printed legends, patch cables",
+      "thesis": "Your repo as a patched modular rig: branches are coloured cables, commits are jacks, merging is patching one cable into another.",
+      "palette": ["#0e0f11", "#17181b", "#ece8df", "#ff5a3c", "#ffb627", "#36c3d0", "#86d05a", "#a07cff"],
+      "materials": ["matte black anodized aluminium", "white screen-printed legends", "braided patch cable", "pin LEDs"],
+      "viewport": "Matte black rig: tabs as a rail, toolbar as a row of keyed modules with legends, sidebar a jack field, the graph's lanes drawn as cables with a hint of sag, the commit panel a module with LED state.",
+      "risk": "Tips into skeuomorphic gear-porn if knobs, screws and textures creep in; the panels must stay flat and typographic.",
+      "raised": [
+        { "from": "challenger-japanese-density", "raise": "Hairline module grid: panels tile edge to edge on 1px seams with no padding inflation, so a 28px commit row holds five columns cleanly." },
+        { "from": "challenger-acetate-manual", "raise": "No easing curves: every state change is a crisp switch-throw under 120ms, and elevation exists only as panel ply, never as glow." },
+        { "from": "challenger-doujin-catalog", "raise": "Stamped codes: every commit carries its short SHA as a printed code, and selection is a ring around the jack, not a filled row." },
+        { "from": "challenger-variable-specimen", "raise": "Hierarchy by scale and weight alone: legends carry no ornament, no icon tiles, no gradients." }
+      ]
+    },
+    {
+      "id": "model-pick",
+      "label": "Transit Diagram",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "Vignelli's 1972 New York subway diagram and Beck's Tube map",
+      "thesis": "History drawn as a transit diagram: branches are lines, commits are stations, merges are interchanges.",
+      "palette": ["#121314", "#1d1f21", "#f4f1ea", "#ee352e", "#00933c", "#0039a6", "#fccc0a", "#b933ad"],
+      "materials": ["porcelain enamel signage", "strict 45° line geometry", "station roundels"],
+      "viewport": "Charcoal shell; the graph is the hero, drawn with 45° line turns and station dots; the current branch's line is labelled like a route bullet in the toolbar.",
+      "risk": "The most familiar reading: git-as-subway-map is the stock metaphor and GitKraken's graph already reads this way."
+    },
+    {
+      "id": "challenger-airport",
+      "label": "Concourse Wayfinding",
+      "verdict": "competitive",
+      "lineage": "International airport sign systems (Schiphol yellow)",
+      "thesis": "Every repo state signed like a concourse junction: where you are, where you can go, and how far.",
+      "palette": ["#0b0b0b", "#1a1a1a", "#ffcc00", "#ffffff", "#e6e6e6"],
+      "materials": ["powder-coated aluminium frames", "matte polycarbonate sign panels"],
+      "viewport": "Black shell with one yellow band naming the current branch and its distance from upstream (↑2 ↓1) at monumental scale; yellow appears nowhere else.",
+      "case": "Fuses well: current branch and upstream distance map to gate and walking minutes. Holds product clarity, loses audience identification to the patch bay.",
+      "risk": "A yellow band all day can fatigue; the discipline only works if yellow stays reserved for 'you are here'.",
+      "hero": "https://impeccable.style/worlds/cards/wayfinding-cartography-signage-terminal-yellow-wayfinding-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/wayfinding-cartography-signage-terminal-yellow-wayfinding.webp"
+    },
+    {
+      "id": "challenger-orienteering",
+      "label": "Orienteering Course",
+      "verdict": "competitive",
+      "lineage": "ISOM orienteering maps and control legends",
+      "thesis": "History as terrain in a fixed ink language, with your branch's path riding above it in one course colour.",
+      "palette": ["#121516", "#1b1f20", "#a5b36a", "#8c5a2b", "#5fa7d6", "#9b4dff", "#f2efe6"],
+      "materials": ["contour ink", "ISOM symbol set", "numbered control circles"],
+      "viewport": "The graph as muted terrain; HEAD's first-parent lineage drawn in course purple with numbered control circles; a legend table in the side panel.",
+      "case": "Fuses cleanly: HEAD's lineage becomes the course. Holds product clarity, loses audience identification.",
+      "risk": "Muted terrain can make every other branch too quiet to read at a glance.",
+      "hero": "https://impeccable.style/worlds/cards/notation-diagram-systems-orienteering-map-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/notation-diagram-systems-orienteering-map.webp"
+    },
+    {
+      "id": "challenger-japanese-density",
+      "label": "High-Density Module Web",
+      "verdict": "declined",
+      "lineage": "Japanese contemporary high-density sites",
+      "thesis": "Every repo fact packed into hairline-ruled modules with small red tabs.",
+      "palette": ["#ffffff", "#111111", "#d7000f", "#e5e5e5"],
+      "materials": ["hairline rules", "boxed modules", "tab headers"],
+      "viewport": "A mosaic of ruled modules: branches, files, commits all tiled edge to edge.",
+      "case": "Fuses poorly: a mixed-skill team drowns in the density, and the white ground fights the dark-mode requirement.",
+      "kept": "Kept its hairline module grid with no padding inflation.",
+      "risk": "Clutter for anyone who isn't already an expert.",
+      "hero": "https://impeccable.style/worlds/cards/japanese-high-density-web-hero.webp"
+    },
+    {
+      "id": "challenger-acetate-manual",
+      "label": "Acetate Tab Manual",
+      "verdict": "declined",
+      "lineage": "Boxed-software reference manuals with acetate overlays",
+      "thesis": "Each section a coloured divider board with clear acetate leaves above it.",
+      "palette": ["#e9e4d8", "#ff6a13", "#ffd100", "#0047bb", "#7a3fbf"],
+      "materials": ["milk acetate", "coloured divider board", "punched hinges"],
+      "viewport": "Graph, changes and commit as tabbed divider sections down the fore edge.",
+      "case": "Fuses poorly: a reading-measure book form slows an all-day operating tool.",
+      "kept": "Kept its stepped, easing-free motion and ply-only elevation.",
+      "risk": "Reads as a book, not a tool.",
+      "hero": "https://impeccable.style/worlds/cards/rw-manual-acetate-tab-board-hero.webp"
+    },
+    {
+      "id": "challenger-doujin-catalog",
+      "label": "Convention Circle Catalog",
+      "verdict": "declined",
+      "lineage": "Doujin event catalogs on newsprint",
+      "thesis": "Commits as stamp-sized cells in a numbered hall grid.",
+      "palette": ["#e9e6dc", "#151515", "#2a7de1"],
+      "materials": ["newsprint", "biro circles"],
+      "viewport": "A dense numbered grid of commit cells keyed to a branch map.",
+      "case": "Fuses poorly: a grid loses the parent/child topology the graph exists to show.",
+      "kept": "Kept its stamped codes and ring-not-fill selection.",
+      "risk": "Topology disappears into a grid.",
+      "hero": "https://impeccable.style/worlds/cards/pop-culture-shelf-doujin-event-catalog-hero.webp"
+    },
+    {
+      "id": "challenger-variable-specimen",
+      "label": "Variable Type Specimen",
+      "verdict": "declined",
+      "lineage": "Interactive variable-font specimens",
+      "thesis": "Hierarchy by type scale alone, driven live by sliders.",
+      "palette": ["#f7f6f2", "#0d0d0d", "#ff3b00"],
+      "materials": ["flat paper", "letterforms"],
+      "viewport": "One giant glyph-scale statement with tiny utility labels.",
+      "case": "Fuses poorly: nothing in daily Git work maps to an axis slider.",
+      "kept": "Kept hierarchy by scale and weight alone, with no ornament.",
+      "risk": "Pure typography leaves the graph without a material language.",
+      "hero": "https://impeccable.style/worlds/cards/variable-font-specimen-hero.webp"
+    }
+  ],
+  "reroll": { "registers": ["safer", "bolder"] },
+  "buildPath": { "value": "code" },
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "GitKraken's world played straight: slate-dark shell, teal accent, avatar-node graph.",
+    "palette": ["#1e2128", "#2b2f37", "#15a0bf", "#e1e4e8"],
+    "materials": ["flat slate panels", "avatar nodes", "rounded pills"],
+    "viewport": "The three-pane GitKraken arrangement at full craft.",
+    "risk": "Indistinguishable from GitKraken by design."
+  },
+  "steer": true
+}

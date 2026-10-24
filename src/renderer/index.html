@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitDonkey</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="show-welcome">
+  <div id="app">
+    <header id="rail">
+      <div class="rail-lights" aria-hidden="true"></div>
+      <div id="tabs" role="tablist" aria-label="Open repositories"></div>
+      <button id="tab-add" class="rail-add" aria-label="New tab">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+      </button>
+      <div class="rail-fill"></div>
+      <div class="rail-brand" aria-hidden="true">GitDonkey</div>
+    </header>
+    <nav id="toolbar" aria-label="Repository actions" hidden></nav>
+    <main id="main">
+      <section id="welcome" aria-label="Welcome"></section>
+      <section id="repo">
+        <aside id="sidebar" aria-label="Branches, remotes, stashes and tags"></aside>
+        <div class="splitter" data-split="sidebar" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
+        <section id="center">
+          <div id="graph"></div>
+          <div id="detail" aria-label="File detail"></div>
+        </section>
+        <div class="splitter" data-split="panel" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
+        <aside id="panel" aria-label="Commit panel"></aside>
+      </section>
+    </main>
+    <footer id="status" role="status"></footer>
+  </div>
+  <div id="layer"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

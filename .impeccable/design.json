@@ -1,0 +1,582 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-23T20:03:52+00:00",
+  "title": "Design System: GitDonkey",
+  "extensions": {
+    "colorMeta": {
+      "keycap": {
+        "role": "primary",
+        "displayName": "Keycap White",
+        "tonalRamp": [
+          "#0d0b06",
+          "#28251e",
+          "#45423a",
+          "#646159",
+          "#86827a",
+          "#a8a59c",
+          "#cdc9c0",
+          "#f2eee5"
+        ]
+      },
+      "amber": {
+        "role": "primary",
+        "displayName": "HEAD Amber",
+        "tonalRamp": [
+          "#120900",
+          "#332102",
+          "#583c05",
+          "#815800",
+          "#ab7701",
+          "#d79711",
+          "#febc49",
+          "#ffeccf"
+        ]
+      },
+      "keycap-hover": {
+        "role": "primary",
+        "displayName": "Keycap Hover",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "cyan": {
+        "role": "secondary",
+        "displayName": "Cable Cyan",
+        "tonalRamp": [
+          "#000e10",
+          "#022b2f",
+          "#054b51",
+          "#0d6e77",
+          "#16939e",
+          "#27bac7",
+          "#5adfec",
+          "#c7f9fe"
+        ]
+      },
+      "red": {
+        "role": "secondary",
+        "displayName": "Cable Red",
+        "tonalRamp": [
+          "#1e0100",
+          "#490901",
+          "#7a1704",
+          "#af260b",
+          "#e33e20",
+          "#fc775e",
+          "#feb4a4",
+          "#ffe9e4"
+        ]
+      },
+      "violet": {
+        "role": "secondary",
+        "displayName": "Cable Violet",
+        "tonalRamp": [
+          "#0f0029",
+          "#2d0162",
+          "#4c1899",
+          "#6a41bf",
+          "#8a65e6",
+          "#aa90fb",
+          "#cbbffd",
+          "#efecfe"
+        ]
+      },
+      "green": {
+        "role": "secondary",
+        "displayName": "Cable Green",
+        "tonalRamp": [
+          "#040f00",
+          "#132c02",
+          "#264e05",
+          "#3a710e",
+          "#509717",
+          "#73bc45",
+          "#96e16b",
+          "#d1ffba"
+        ]
+      },
+      "pink": {
+        "role": "secondary",
+        "displayName": "Cable Pink",
+        "tonalRamp": [
+          "#1c000c",
+          "#480227",
+          "#790545",
+          "#aa1a66",
+          "#d24687",
+          "#fb6baa",
+          "#feaecc",
+          "#ffe7ef"
+        ]
+      },
+      "blue": {
+        "role": "secondary",
+        "displayName": "Cable Blue",
+        "tonalRamp": [
+          "#000826",
+          "#012059",
+          "#033a93",
+          "#1959c6",
+          "#3d7ded",
+          "#71a4fd",
+          "#accafe",
+          "#e6efff"
+        ]
+      },
+      "orange": {
+        "role": "secondary",
+        "displayName": "Cable Orange",
+        "tonalRamp": [
+          "#180600",
+          "#3f1900",
+          "#683006",
+          "#994601",
+          "#ca6003",
+          "#f58132",
+          "#feb68e",
+          "#ffeade"
+        ]
+      },
+      "teal": {
+        "role": "secondary",
+        "displayName": "Cable Teal",
+        "tonalRamp": [
+          "#000f09",
+          "#012d20",
+          "#024f3a",
+          "#087356",
+          "#109973",
+          "#21c193",
+          "#4ce8b5",
+          "#c0ffe5"
+        ]
+      },
+      "bone": {
+        "role": "secondary",
+        "displayName": "Cable Bone",
+        "tonalRamp": [
+          "#0e0b04",
+          "#29251b",
+          "#464237",
+          "#656156",
+          "#878276",
+          "#a9a598",
+          "#cec9bc",
+          "#f3eee1"
+        ]
+      },
+      "case": {
+        "role": "neutral",
+        "displayName": "Case Black",
+        "tonalRamp": [
+          "#0a0b0d",
+          "#242527",
+          "#414244",
+          "#606164",
+          "#818285",
+          "#a3a5a8",
+          "#c7c9cc",
+          "#edeef2"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "tonalRamp": [
+          "#0a0b0e",
+          "#242528",
+          "#414245",
+          "#606165",
+          "#818286",
+          "#a3a5a9",
+          "#c7c9cd",
+          "#edeef3"
+        ]
+      },
+      "panel-2": {
+        "role": "neutral",
+        "displayName": "Raised Panel",
+        "tonalRamp": [
+          "#0a0b0f",
+          "#242529",
+          "#414246",
+          "#606166",
+          "#818287",
+          "#a3a5aa",
+          "#c7c9ce",
+          "#edeef4"
+        ]
+      },
+      "panel-3": {
+        "role": "neutral",
+        "displayName": "Hover Ply",
+        "tonalRamp": [
+          "#090b0f",
+          "#23252a",
+          "#404247",
+          "#5f6167",
+          "#808288",
+          "#a2a5ab",
+          "#c6c9d0",
+          "#ebeef5"
+        ]
+      },
+      "panel-4": {
+        "role": "neutral",
+        "displayName": "Pressed Ply",
+        "tonalRamp": [
+          "#090b10",
+          "#23252b",
+          "#404248",
+          "#5f6168",
+          "#808289",
+          "#a2a5ac",
+          "#c6c9d1",
+          "#ebeef6"
+        ]
+      },
+      "seam": {
+        "role": "neutral",
+        "displayName": "Seam",
+        "tonalRamp": [
+          "#0b0b0d",
+          "#252527",
+          "#424244",
+          "#616163",
+          "#828284",
+          "#a5a5a7",
+          "#c9c9cb",
+          "#eeeef1"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "tonalRamp": [
+          "#090b0f",
+          "#23252a",
+          "#404247",
+          "#5f6167",
+          "#808288",
+          "#a2a5ab",
+          "#c6c9d0",
+          "#eceef5"
+        ]
+      },
+      "rule-2": {
+        "role": "neutral",
+        "displayName": "Strong Rule",
+        "tonalRamp": [
+          "#090b10",
+          "#22252b",
+          "#3f4248",
+          "#5e6168",
+          "#7f8289",
+          "#a1a5ac",
+          "#c5c9d1",
+          "#ebeff6"
+        ]
+      },
+      "legend": {
+        "role": "neutral",
+        "displayName": "Legend",
+        "tonalRamp": [
+          "#0d0b06",
+          "#28251e",
+          "#45423a",
+          "#646159",
+          "#86827a",
+          "#a8a59c",
+          "#cdc9c0",
+          "#f2eee5"
+        ]
+      },
+      "legend-2": {
+        "role": "neutral",
+        "displayName": "Legend Dim",
+        "tonalRamp": [
+          "#0e0b06",
+          "#28251e",
+          "#45423b",
+          "#646159",
+          "#86827a",
+          "#a9a59d",
+          "#cdc9c0",
+          "#f2eee5"
+        ]
+      },
+      "legend-3": {
+        "role": "neutral",
+        "displayName": "Legend Faint",
+        "tonalRamp": [
+          "#0e0b05",
+          "#28251d",
+          "#45423a",
+          "#656158",
+          "#868279",
+          "#a9a59b",
+          "#cdc9bf",
+          "#f2eee4"
+        ]
+      },
+      "keycap-ink": {
+        "role": "neutral",
+        "displayName": "Keycap Ink",
+        "tonalRamp": [
+          "#0a0b0d",
+          "#242527",
+          "#414244",
+          "#606164",
+          "#818285",
+          "#a3a5a8",
+          "#c8c9cc",
+          "#edeef1"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Wordmark",
+        "purpose": "The welcome wordmark only."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Commit subject in the commit-details module."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Repository content and controls."
+      },
+      "label": {
+        "displayName": "Printed Legend",
+        "purpose": "Module heads, key legends, column headers, field legends; uppercase, never below 10px."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "SHAs, stamps, diffs, blame and merge code only."
+      }
+    },
+    "shadows": [
+      {
+        "name": "floating-overlay",
+        "value": "0 14px 40px rgba(0, 0, 0, 0.6)",
+        "purpose": "Context menus; toasts at 0.55 alpha."
+      },
+      {
+        "name": "modal",
+        "value": "0 24px 64px rgba(0, 0, 0, 0.6)",
+        "purpose": "Dialogs over a rgba(4,4,5,0.66) scrim."
+      },
+      {
+        "name": "lifted-strip",
+        "value": "0 8px 24px rgba(0, 0, 0, 0.5)",
+        "purpose": "Expanded multi-ref plug stack."
+      },
+      {
+        "name": "selection-bar",
+        "value": "0 10px 30px rgba(0, 0, 0, 0.55)",
+        "purpose": "Floating line-selection bar in the diff view."
+      }
+    ],
+    "motion": [
+      {
+        "name": "throw",
+        "value": "90ms steps(2, jump-end)",
+        "purpose": "Every UI state change: colour, background, border, chevron rotation, and the ply-in of modals and toasts. No easing curves."
+      },
+      {
+        "name": "ply-in",
+        "value": "translateY(4px) to none over the throw",
+        "purpose": "Entry of modals and toasts."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "transition: none; animation: none",
+        "purpose": "Under prefers-reduced-motion: reduce."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "toolbar-legends-hide",
+        "value": "1360px (viewport)"
+      },
+      {
+        "name": "graph-author-drops",
+        "value": "720px (graph container)"
+      },
+      {
+        "name": "graph-sha-drops",
+        "value": "560px (graph container)"
+      }
+    ],
+    "layout": {
+      "railHeight": "38px",
+      "toolbarHeight": "62px",
+      "statusHeight": "24px",
+      "rowHeight": "28px",
+      "sidebarWidth": "248px",
+      "panelWidth": "392px",
+      "graphColumns": "refs 176px, lanes, message minmax(120px,1fr), author 120px, date 88px, sha 72px"
+    },
+    "graph": {
+      "lanePalette": [
+        "#ffb627",
+        "#36c3d0",
+        "#ff5a3c",
+        "#a07cff",
+        "#86d05a",
+        "#ff6fae",
+        "#4c8dff",
+        "#ff8a3d",
+        "#2fd4a3",
+        "#d9d4c7"
+      ],
+      "cableWidth": "3.5px",
+      "cableSheath": "6.5px case-coloured, on curves",
+      "jack": "7px ring, 3.25px hole; HEAD white core 1.75px; merge 5px solid; WIP dashed 6.5px ring",
+      "selection": "1.5px legend ring (10.5px radius, 8px on merges)",
+      "authorLed": "7px dot in hashed cable colour",
+      "refLeader": "2px lane-colour line"
+    }
+  },
+  "components": [
+    {
+      "name": "Keycap (primary)",
+      "kind": "button",
+      "refersTo": "button-key",
+      "description": "The one primary action per module: a white printed key.",
+      "html": "<button class=\"ds-btn ds-btn-key\">Commit 1 file to develop</button>",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 14px;border-radius:4px;font:600 13px/1.4 var(--font-ui);white-space:nowrap;cursor:default;transition:background-color var(--throw),border-color var(--throw),color var(--throw);} .ds-btn-key{background:var(--keycap);border:1px solid var(--keycap);color:var(--keycap-ink);} .ds-btn-key:hover{background:var(--keycap-hover);border-color:var(--keycap-hover);} .ds-btn-key:active{background:#d6d2c8;} .ds-btn-key:focus-visible{outline:2px solid var(--amber);outline-offset:1px;}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Quiet ply key for every non-primary action.",
+      "html": "<button class=\"ds-btn2\">Unstage all</button>",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-btn2{display:inline-flex;align-items:center;height:30px;padding:0 14px;border-radius:4px;background:var(--panel-3);border:1px solid var(--rule-2);color:var(--legend);font:500 13px/1.4 var(--font-ui);cursor:default;transition:background-color var(--throw),border-color var(--throw);} .ds-btn2:hover{background:var(--panel-4);border-color:#44474f;} .ds-btn2:active{background:#33363d;} .ds-btn2:focus-visible{outline:2px solid var(--amber);outline-offset:1px;}"
+    },
+    {
+      "name": "Toolbar Key",
+      "kind": "button",
+      "refersTo": "toolbar-key",
+      "description": "Borderless toolbar key: line icon over a Michroma legend, with ahead badge.",
+      "html": "<div class=\"ds-face\"><button class=\"ds-key\"><span class=\"ds-ico\"><svg viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 15V3\"/><path d=\"m7 8 5-5 5 5\"/><path d=\"M5 21h14\"/></svg><span class=\"ds-badge\">2</span></span><span class=\"ds-legend\">Push</span></button></div>",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-face{display:inline-flex;height:62px;padding:0 10px;background:var(--panel-2);} .ds-key{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;min-width:54px;padding:0 8px;margin:6px 0;border:0;border-radius:4px;background:none;color:var(--legend);cursor:default;transition:background-color var(--throw);} .ds-key:hover{background:var(--panel-3);} .ds-key:active{background:var(--panel-4);} .ds-key:focus-visible{outline:2px solid var(--amber);outline-offset:1px;} .ds-ico{position:relative;display:grid;place-items:center;} .ds-badge{position:absolute;top:-6px;left:13px;min-width:16px;height:15px;padding:0 4px;border-radius:8px;font:600 10px/15px var(--font-ui);text-align:center;background:var(--green);color:var(--keycap-ink);} .ds-legend{font-family:var(--font-legend);font-size:10px;line-height:1;letter-spacing:.06em;text-transform:uppercase;color:var(--legend-2);}"
+    },
+    {
+      "name": "Input Well",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Case-black well; the border turns amber on focus.",
+      "html": "<input class=\"ds-input\" placeholder=\"Summary\">",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-input{width:280px;height:30px;padding:0 10px;font:13px/1.4 var(--font-ui);color:var(--legend);background:var(--case);border:1px solid var(--rule-2);border-radius:4px;caret-color:var(--amber);transition:border-color var(--throw);} .ds-input::placeholder{color:var(--legend-3);} .ds-input:hover{border-color:#3d4047;} .ds-input:focus{border-color:var(--amber);outline:none;}"
+    },
+    {
+      "name": "Ref Plugs",
+      "kind": "chip",
+      "refersTo": "plug",
+      "description": "Branch, remote and tag plugs; HEAD is lit in its lane colour.",
+      "html": "<div class=\"ds-row\"><span class=\"ds-plug ds-lit\" style=\"--lane:#ffb627\"><span class=\"ds-pj\"></span>develop</span><span class=\"ds-plug\" style=\"--lane:#a07cff\"><span class=\"ds-pj\"></span>release/1.1</span><span class=\"ds-plug ds-remote\" style=\"--lane:#ffb627\"><span class=\"ds-pj\"></span>origin/develop</span><span class=\"ds-plug ds-tag\"><span class=\"ds-pj\"></span>v1.0.1</span></div>",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-row{display:flex;gap:6px;padding:8px;background:var(--case);} .ds-plug{--lane:var(--legend-3);display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 7px 0 6px;border-radius:3px;background:color-mix(in srgb,var(--lane) 16%,var(--panel));border:1px solid color-mix(in srgb,var(--lane) 55%,transparent);color:var(--legend);font:500 12px var(--font-ui);white-space:nowrap;} .ds-plug:hover{border-color:var(--lane);} .ds-pj{position:relative;width:9px;height:9px;border-radius:50%;background:var(--lane);} .ds-pj::after{content:'';position:absolute;inset:2.5px;border-radius:50%;background:var(--case);} .ds-lit{background:var(--lane);border-color:var(--lane);color:var(--keycap-ink);font-weight:700;} .ds-lit .ds-pj{background:var(--keycap-ink);} .ds-lit .ds-pj::after{background:var(--lane);} .ds-remote{border-style:dashed;} .ds-tag{background:var(--panel-2);border-color:var(--rule-2);color:var(--legend-2);}"
+    },
+    {
+      "name": "Graph Row",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "Cable lane, jack, ring selection, author pin LED and stamped SHA.",
+      "html": "<div class=\"ds-g\"><div class=\"ds-gr\"><svg width=\"40\" height=\"28\"><path d=\"M14 0V28\" stroke=\"#ffb627\" stroke-width=\"3.5\" stroke-linecap=\"round\"/><circle cx=\"14\" cy=\"14\" r=\"7\" fill=\"#ffb627\"/><circle cx=\"14\" cy=\"14\" r=\"3.25\" fill=\"#0b0c0e\"/><circle cx=\"14\" cy=\"14\" r=\"10.5\" fill=\"none\" stroke=\"#ece8df\" stroke-width=\"1.5\"/></svg><span class=\"ds-msg ds-sel\">Log slow requests over 500 ms</span><span class=\"ds-au\"><i style=\"background:#86d05a\"></i>Priya Raman</span><span class=\"ds-sha\">b18d20f</span></div><div class=\"ds-gr\"><svg width=\"40\" height=\"28\"><path d=\"M14 0V28\" stroke=\"#ffb627\" stroke-width=\"3.5\" stroke-linecap=\"round\"/><circle cx=\"14\" cy=\"14\" r=\"7\" fill=\"#ffb627\"/><circle cx=\"14\" cy=\"14\" r=\"3.25\" fill=\"#0b0c0e\"/></svg><span class=\"ds-msg\">Tighten CORS allow-list</span><span class=\"ds-au\"><i style=\"background:#ff5a3c\"></i>Lucas Brandt</span><span class=\"ds-sha\">7230fd8</span></div></div>",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-g{background:var(--case);width:520px;} .ds-gr{display:grid;grid-template-columns:40px 1fr 120px 72px;align-items:center;height:28px;color:var(--legend);font:13px var(--font-ui);} .ds-gr:hover{background:rgba(255,255,255,.025);} .ds-msg{padding:0 10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;} .ds-sel{color:#fff;font-weight:600;} .ds-au{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--legend-2);} .ds-au i{width:7px;height:7px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(0,0,0,.35);} .ds-sha{font:11.5px var(--font-mono);color:var(--legend-3);letter-spacing:.02em;padding:0 10px;}"
+    },
+    {
+      "name": "Context Menu",
+      "kind": "nav",
+      "refersTo": "menu-item-hover",
+      "description": "Raised-ply menu; the hovered item becomes a keycap.",
+      "html": "<div class=\"ds-menu\"><button class=\"ds-mi\">Merge develop into main</button><button class=\"ds-mi\">Rebase develop onto main</button><div class=\"ds-sep\"></div><button class=\"ds-mi ds-danger\">Delete develop</button></div>",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-menu{width:240px;padding:5px;background:var(--panel-2);border:1px solid var(--rule-2);border-radius:6px;box-shadow:0 14px 40px rgba(0,0,0,.6);} .ds-mi{display:flex;align-items:center;width:100%;height:28px;padding:0 10px 0 6px;border:0;border-radius:3px;background:none;text-align:left;color:var(--legend);font:13px var(--font-ui);cursor:default;} .ds-mi:hover,.ds-mi:focus-visible{background:var(--keycap);color:var(--keycap-ink);outline:none;} .ds-danger{color:#ff7a61;} .ds-danger:hover{background:var(--red);color:var(--keycap-ink);} .ds-sep{height:1px;margin:5px 6px;background:var(--rule-2);}"
+    },
+    {
+      "name": "Module Head",
+      "kind": "card",
+      "refersTo": "",
+      "description": "Raised module head with a pin LED and printed Michroma legend.",
+      "html": "<div class=\"ds-mod\"><div class=\"ds-mh\"><span class=\"ds-led\"></span><span class=\"ds-lg\">Working tree</span></div><div class=\"ds-mb\">3 changes on develop</div></div>",
+      "css": ":host{--case:#0b0c0e;--panel:#131417;--panel-2:#191a1e;--panel-3:#202227;--panel-4:#292b31;--seam:#040405;--rule:#24262b;--rule-2:#31343a;--legend:#ece8df;--legend-2:#aaa69e;--legend-3:#8e8a81;--keycap:#ece8df;--keycap-hover:#fff;--keycap-ink:#0e0f11;--amber:#ffb627;--cyan:#36c3d0;--red:#ff5a3c;--violet:#a07cff;--green:#86d05a;--throw:90ms steps(2, jump-end);--font-ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--font-legend:'Michroma','Eurostile','Microgramma',-apple-system,sans-serif;--font-mono:'SF Mono',ui-monospace,Menlo,monospace;} .ds-mod{width:320px;background:var(--panel);} .ds-mh{display:flex;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;background:var(--panel-2);border-bottom:1px solid var(--seam);} .ds-led{width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:inset 0 0 0 1px rgba(0,0,0,.35);} .ds-lg{font-family:var(--font-legend);font-size:10px;line-height:1;letter-spacing:.06em;text-transform:uppercase;color:var(--legend);} .ds-mb{padding:10px 12px;font:12.5px var(--font-ui);color:var(--legend-2);}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Patch Bay",
+    "overview": "GitDonkey is a patched modular rig. Every surface is a matte black anodized module seated in a case, divided by 1px seams; every label is a warm white legend screen-printed in a wide hardware face; every branch is a coloured patch cable and every commit is a jack it runs through. Merging is literal: you drag one branch's plug onto another and a cable follows the pointer. The metaphor is load-bearing, not decoration: lanes, ref plugs, author identity, selection and state are all expressed as cables, jacks and pin LEDs.\n\nThe rig is dense and calm. Rows are 28px, side modules are fixed-width, and colour is spent almost entirely on the ten cable hues, which carry meaning (lane, ref, author, diff status, syntax). Everything else is ply: five near-black panel tones and three legend whites. Motion is a switch being thrown, not a curve being eased: state changes land in two hard steps over 90ms.\n\nIt refuses the category default of slate-grey IDE panels with one teal accent and avatar bubbles. It also refuses the hardware-skeuomorph trap: no glow, no colour gradients on surfaces, no knobs, no screws. The hardware lives in the system's vocabulary and its type, not in rendered materials.",
+    "keyCharacteristics": [
+      "Matte black ply (case to panel-4) on 1px seams; depth by tone, not shadow.",
+      "Ten patch-cable hues, alternating warm and cool, with amber always first for HEAD.",
+      "Michroma legends (uppercase, at least 10px) over a system-sans content layer; mono only for SHAs and code.",
+      "A white keycap is the one primary action per module.",
+      "Flat pin LEDs and jacks carry state, identity and selection.",
+      "Stepped motion: 90ms in two steps, no easing curves."
+    ],
+    "rules": [
+      {
+        "name": "The Lane Order Rule",
+        "body": "Lanes take the cable palette in order by column: amber, cyan, red, violet, green, pink, blue, orange, teal, bone. Amber is column 0 and therefore HEAD; the alternation of warm and cool is what keeps adjacent cables apart. Never reorder or reshuffle the palette.",
+        "section": "colors"
+      },
+      {
+        "name": "The Colour Means Something Rule",
+        "body": "Cable hues appear only where they encode a lane, ref, author, status or syntax token. Chrome is ply and legend white.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ten Pixel Floor Rule",
+        "body": "Michroma is never set below 10px. Its wide, thin forms collapse at smaller sizes; if a legend does not fit at 10px, shorten it or drop it (as the toolbar key legends do below 1360px), never shrink it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Printed Legend Rule",
+        "body": "Michroma labels hardware: modules, keys, columns, fields. Content (anything from the repository) is always in the system sans or mono, never Michroma.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Rig Rule",
+        "body": "Nothing seated in the rig casts a shadow. Only overlays float.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Seam Rule",
+        "body": "Modules are separated by 1px seam gaps or seam borders, not by margins or outlines.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do take lane colours in palette order by column, amber first for HEAD.",
+      "Do draw cables at 3.5px with round caps and a case-coloured sheath where they curve.",
+      "Do show selection in the graph as a ring on the jack.",
+      "Do show authors as small pin LEDs in their hashed cable colour.",
+      "Do give each module at most one white keycap for its primary action.",
+      "Do set Michroma legends uppercase at 10px or larger, and keep legend-3 at #8e8a81.",
+      "Do animate with the throw (90ms steps(2)).",
+      "Do drop graph columns by container width: author first, SHA last.",
+      "Do keep toasts clear of the commit module.",
+      "Do separate modules with 1px seams and step ply tones for hover and pressed states."
+    ],
+    "donts": [
+      "Don't use avatar bubbles or initials circles for authors.",
+      "Don't fill a graph row to mark selection.",
+      "Don't use easing curves (ease, ease-out, cubic-bezier) for UI state changes.",
+      "Don't add glow, coloured shadows, knobs or screws.",
+      "Don't fill surfaces with colour gradients. Hatching and pattern fills that mark absent content are part of the system.",
+      "Don't set Michroma below 10px or use it for repository content.",
+      "Don't spend cable colours on chrome that encodes nothing.",
+      "Don't put welcome actions in icon tiles.",
+      "Don't cast shadows from anything seated in the rig."
+    ]
+  }
+}

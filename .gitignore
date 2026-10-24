@@ -1,0 +1,10 @@
+node_modules/
+dist/
+test/e2e/shots/
+assets/.render.html
+.impeccable/hook.cache.json
+src/renderer/.impeccable/
+.impeccable/review/
+.DS_Store
+*.log
+.impeccable/questions/
