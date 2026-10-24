@@ -1136,3 +1136,15 @@ body:has(.overlay.docked) .toasts { right: 480px; }
 .tb-more { margin: 4px 0 0; font-size: 11.5px; color: var(--legend-3); }
 .tb-read > .btn { justify-self: start; margin-top: 10px; }
 .theme-builder .modal-foot .tb-copy { margin-right: auto; }
+
+/* ------------------------------------------------------------------ the donkey */
+
+/* Bottom-left over the end of the sidebar (which leaves him room), under dialogs, menus and toasts. */
+.donkey { position: fixed; left: 6px; bottom: calc(var(--status-h) + 4px); z-index: 60; width: 116px; height: 116px; pointer-events: none; }
+.donkey-hit { display: block; width: 116px; height: 116px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; pointer-events: auto; filter: drop-shadow(0 6px 10px rgb(from var(--shadow) r g b / calc(alpha * 0.35))); }
+.donkey-hit canvas { display: block; width: 116px; height: 116px; }
+.donkey-hit:focus-visible { outline: 2px solid var(--focus); outline-offset: -8px; }
+.donkey-flat { display: grid; place-items: center; width: 100%; height: 100%; }
+.donkey-says { position: absolute; left: 100px; bottom: 74px; width: max-content; max-width: 260px; margin: 0; padding: 8px 12px; border-radius: 8px 8px 8px 2px; background: var(--keycap); color: var(--keycap-ink); font-size: 12.5px; font-weight: 600; line-height: 1.4; box-shadow: 0 8px 24px rgb(from var(--shadow) r g b / calc(alpha * 0.45)); opacity: 0; transform: translateY(4px) scale(0.96); transform-origin: 0 100%; transition: opacity var(--throw), transform var(--throw); pointer-events: none; }
+.donkey-says.on { opacity: 1; transform: none; pointer-events: auto; }
+body.has-donkey .sb-body { padding-bottom: 132px; }

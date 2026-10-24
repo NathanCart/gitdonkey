@@ -39,7 +39,10 @@ export class Updates {
     const prev = this.state;
     this.state = s;
     const v = this.version;
-    if (s.status === 'available' && v && v !== s.skipped && v !== this.later) this.shown = true;
+    if (s.status === 'available' && v && v !== s.skipped && v !== this.later) {
+      if (!this.shown && this.app.donkey) this.app.donkey.react('update', { version: v });
+      this.shown = true;
+    }
     // A download that finishes or fails brings the card back.
     if (prev && prev.status === 'downloading' && s.status !== 'downloading') this.shown = true;
     if (!v) this.shown = false;

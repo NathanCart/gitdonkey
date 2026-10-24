@@ -247,6 +247,9 @@ Raised-ply cards with a 6px corner and floating shadow, stacked bottom-right but
 
 The update notice is a pinned toast: it stays until answered, steps aside while a modal is open, and keeps one keycap (Update, then Restart to update). Its release notes sit in a case-black well like other detail, its download progress is the amber progress fill, and after Later a key on the status strip brings it back, lit cyan (the "behind" colour) while an update waits, amber while it downloads and green when it's ready.
 
+### The donkey
+The logo mark as a 3D enamel badge (bone head, muzzle, jack-socket eyes, forelock cables in the theme's red, amber and cyan), 116px in the bottom-left corner above the status strip; the sidebar leaves room for him. He speaks in a keycap bubble (keycap fill, keycap ink, the same floating shadow as toasts) that opens towards the graph. Motion follows the rig's rules where it can: state changes are quick, idle life is small (breathing, blinks, ear twitches), and reduced motion stops all of it.
+
 ### Themes
 Patch Bay is the default and the reference; every other theme keeps its structure and swaps the ply, legends, keycap and the ten cable colours. Tokens a theme doesn't set (the fifth ply step, a third rule, the brightest/dim/disabled legends, shadow, scrim) are derived in `src/renderer/lib/themes.js`, and tints use `color-mix()` on the cable tokens, so a theme can't leave a hard-coded colour behind. Light themes invert the ply ramp (the case is the lightest layer, panels step towards the legend), use dark keycaps with light ink, and get softer shadows and a lighter scrim. The theme picker and builder dock to the right with no scrim so the window behind is the preview.
 

@@ -40,6 +40,12 @@ The builds aren't code-signed, which rules out the usual Squirrel / electron-upd
 
 When a remote needs a login, GitDonkey asks for it in its own dialog: username and token for HTTPS, passphrase for SSH keys, and a fingerprint check for new SSH hosts. Git then saves the login in your system keychain (macOS Keychain, Windows Credential Manager), so you are only asked once. If the [GitHub CLI](https://cli.github.com/) is installed and logged in (`gh auth login`), GitHub remotes sign in automatically.
 
+## The donkey
+
+A small 3D donkey sits in the bottom-left corner. He breathes, blinks, watches your pointer and says something about what you do: commits, pushes, pulls, merges, conflicts, rebases, branches, stashes, resets, tags, a rejected push, a new theme. Click to poke him (keep clicking and he gets annoyed), double-click to spin him, wiggle the pointer over him to pet him, and right-click for hay, a joke, **Be quiet for an hour** or **Hide the donkey**. With the keyboard, focus him and press Enter to poke or Shift+F10 for his menu.
+
+**Show the donkey** in Settings switches him off and on. He idles at a low frame rate and stops drawing when the window is hidden, and with reduced motion on he stays put and just talks.
+
 ## Themes
 
 **Themes…** (in the GitDonkey menu on macOS, the File menu on Windows, or Settings) has 21 built-in themes: GitDonkey's own Patch Bay, Studio Paper, Eurorack Silver, Hay Bale, Oscilloscope, Amber CRT, Tape Deck, Neon Arcade, Deep Sea and High Contrast, plus Nord, Dracula, Solarized, Gruvbox, Monokai, Catppuccin, Tokyo Night and Rosé Pine. Click one and the whole window changes, graph lanes included.
@@ -94,6 +100,7 @@ npm run brand      # regenerate the icon, logo and brand sheet
 - **Undo / redo** for commits, checkouts, branch create/delete/rename, resets, tags and interactive rebases.
 - **Author avatars** from GitHub and Gravatar (switch off in Settings).
 - **Tabs** for multiple repositories, recent repositories, clone, init, drag a folder in to open it, and auto-refresh when files change.
+- **The donkey**: a 3D donkey in the corner who comments on what you do and can be poked, petted, spun and fed (switch off in Settings).
 - **Themes**: 21 built in, a live theme builder with a readability check, AI-designed themes from a description, and shareable theme codes.
 - **Updates**: a notice when a new release is out, with its notes, and a one-click download and restart (switch off in Settings).
 
@@ -119,7 +126,7 @@ On Windows, read Ctrl for ⌘, Alt for ⌥ and Shift for ⇧.
 
 ```bash
 npm test          # unit tests against real temporary repositories (backend, graph, patches, conflicts, avatars, sign-in, updates, themes)
-npm run test:e2e  # Playwright run of the real app against a demo repo and a bare "origin", then the update flow against a fake release feed, then themes (with a fake AI endpoint)
+npm run test:e2e  # Playwright run of the real app against a demo repo and a bare "origin", then the update flow against a fake release feed, then themes (with a fake AI endpoint), then the donkey
 ```
 
 The update run serves a release one major version ahead from 127.0.0.1. On macOS it goes on to download a real DMG, swap a stand-in app bundle and reopen it; that last check builds a tiny launcher with `cc` from the Xcode Command Line Tools and is skipped without them.

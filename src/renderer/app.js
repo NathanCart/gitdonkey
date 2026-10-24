@@ -17,10 +17,11 @@ import { Updates } from './updates.js';
 import { applyTheme } from './theme.js';
 import { themesDialog } from './themes-ui.js';
 import { findTheme, DEFAULT_THEME } from './lib/themes.js';
+import { Donkey } from './donkey.js';
 
 const PAGE = 1500;
 const DEFAULT_SETTINGS = {
-  pullMode: 'merge', autoFetch: 0, diffMode: 'unified', diffContext: 'hunks', ignoreWhitespace: false, fileView: 'path', confirmDiscard: true, avatars: true, checkUpdates: true, theme: DEFAULT_THEME,
+  pullMode: 'merge', autoFetch: 0, diffMode: 'unified', diffContext: 'hunks', ignoreWhitespace: false, fileView: 'path', confirmDiscard: true, avatars: true, checkUpdates: true, theme: DEFAULT_THEME, donkey: true,
 };
 const DEFAULT_LAYOUT = { sidebar: 248, panel: 392, refs: 176, graphMax: 340, sidebarHidden: false, panelHidden: false };
 
@@ -94,6 +95,7 @@ class App {
     this.lastError = null;
     this.patch = new PatchBay(this);
     this.updates = new Updates(this);
+    this.donkey = new Donkey(this);
   }
 
   get tab() {
@@ -176,6 +178,11 @@ class App {
     this.applyAutoFetch();
     await this.updates.init();
     document.body.classList.add('ready');
+    this.donkey.setEnabled(this.settings.donkey !== false);
+    if (this.donkey.enabled && !this.settings.donkeyMet) {
+      this.donkey.react('hello');
+      this.setSetting('donkeyMet', true, { silent: true });
+    }
   }
 
   // ------------------------------------------------------------ persistence
@@ -202,10 +209,12 @@ class App {
     applyTheme(t, { remember: save });
     if (save) this.setSetting('theme', t.id, { silent: true });
     this.recolor();
+    if (save) this.donkey.react('theme', { name: t.name });
   }
 
   /** Lay the graph out again so its lanes take the theme's cable colours. */
   recolor() {
+    this.donkey.recolor();
     if (this.tab && this.data) {
       this.buildGraph();
       this.renderAll({ skipDetail: true });
@@ -222,6 +231,7 @@ class App {
     invoke('store:set', 'settings', this.settings);
     if (silent) return;
     if (key === 'fileView') this.panel.render();
+    if (key === 'donkey') this.donkey.setEnabled(value, { greet: value });
     if (key === 'avatars') {
       setAvatarsEnabled(value);
       if (this.data) this.renderAll({ skipDetail: true });
@@ -408,6 +418,7 @@ class App {
     }
     this.syncWatch();
     await this.activate(tab.id);
+    this.donkey.react('openRepo', { name: res.name });
     return true;
   }
 
@@ -483,6 +494,7 @@ class App {
     const tab = this.tab;
     const d = tab.data;
     this.buildGraph();
+    this.donkeyNotices(tab, d.status);
     // Selection sanity.
     const sel = tab.ui.selection;
     if (sel.type === 'stash' && !d.stashes.some((s) => s.hash === sel.stash.hash)) tab.ui.selection = { type: 'wip' };
@@ -510,6 +522,17 @@ class App {
     this.layoutData = computeGraph(rows);
     this.indexByHash = new Map(rows.map((c, i) => [c.hash, i]));
     this.refsByHash = buildRefsByHash(d.refs);
+  }
+
+  /** Conflicts appearing, or a pile of changes, are worth a word from the donkey (once each). */
+  donkeyNotices(tab, st) {
+    if (st.conflicted.length && !tab.ui.donkeyConflicts) this.donkey.react('conflicts', { count: st.conflicted.length });
+    tab.ui.donkeyConflicts = st.conflicted.length > 0;
+    const changes = st.staged.length + st.unstaged.length;
+    if (changes >= 40 && !tab.ui.donkeyMany) {
+      tab.ui.donkeyMany = true;
+      this.donkey.react('manyChanges', { count: changes });
+    }
   }
 
   laneColorFor(hash) {
@@ -992,6 +1015,7 @@ class App {
       // The user may have switched tabs while it was writing.
       if (this.tab === tab) panel.setMessage(message);
       else tab.ui.draft = { ...(tab.ui.draft || {}), summary: r.summary, description: r.description };
+      this.donkey.react('aiMessage');
       toast({
         type: 'success',
         title: 'Message written',

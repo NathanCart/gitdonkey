@@ -10,9 +10,32 @@ export class GitError extends Error {
   }
 }
 
+const gitListeners = new Set();
+
+/** Hear about every Git call: { repo, method, args, ok, result, error }. Returns an unsubscribe function. */
+export function onGitCall(fn) {
+  gitListeners.add(fn);
+  return () => gitListeners.delete(fn);
+}
+
+function tell(call) {
+  for (const fn of gitListeners) {
+    try {
+      fn(call);
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+}
+
 export async function git(repo, method, ...args) {
   const r = await bridge.git(repo, method, ...args);
-  if (!r || !r.ok) throw new GitError((r && r.error) || 'Unknown error', r && r.kind);
+  if (!r || !r.ok) {
+    const error = new GitError((r && r.error) || 'Unknown error', r && r.kind);
+    tell({ repo, method, args, ok: false, error });
+    throw error;
+  }
+  tell({ repo, method, args, ok: true, result: r.result });
   return r.result;
 }
 

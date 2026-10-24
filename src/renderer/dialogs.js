@@ -150,6 +150,7 @@ export async function settingsDialog(app) {
         { value: '15', label: 'Every 15 minutes' }, { value: '30', label: 'Every 30 minutes' },
       ] },
       { name: 'avatars', type: 'checkbox', label: 'Show author avatars', value: s.avatars !== false, hint: 'Pictures come from GitHub and Gravatar, looked up by a hash of each author’s email.' },
+      { name: 'donkey', type: 'checkbox', label: 'Show the donkey', value: s.donkey !== false, hint: 'A 3D donkey in the bottom-left corner who comments on what you do in Git. Click, double-click, pet or right-click him.' },
       { name: 'checkUpdates', type: 'checkbox', label: 'Check for updates automatically', value: s.checkUpdates !== false, hint: `You have GitDonkey ${app.info.version}. It looks for a new release on GitHub at launch and every few hours.` },
       { name: 'confirmDiscard', type: 'checkbox', label: 'Ask before discarding changes', value: s.confirmDiscard !== false },
     ],
@@ -173,6 +174,7 @@ export async function settingsDialog(app) {
     if (values.checkUpdates) invoke('update:check').catch(() => {});
   }
   if ((s.avatars !== false) !== values.avatars) app.setSetting('avatars', values.avatars);
+  if ((s.donkey !== false) !== values.donkey) app.setSetting('donkey', values.donkey);
   app.applyAutoFetch();
   if (app.repo && values.name.trim() && values.email.trim() && (values.name !== id.globalName || values.email !== id.globalEmail)) {
     await git(app.repo, 'setIdentity', { name: values.name, email: values.email, global: true }).catch((e) => toast({ type: 'error', title: 'Could not save identity', message: e.message }));
