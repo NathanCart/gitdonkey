@@ -107,6 +107,51 @@ function buildThemePrompt(description) {
   return { system, user: `Theme: ${String(description).trim().slice(0, 300)}` };
 }
 
+const CONFLICT_LINES = 160; // per side of one conflict
+const CONFLICT_CHARS = 40000; // for the whole prompt
+
+/**
+ * A prompt to resolve a file's conflicts. `conflicts` are
+ * { index, ours, base, theirs, before, after } (arrays of lines), as
+ * conflictContext() in src/renderer/lib/conflicts.js makes them.
+ */
+function buildConflictPrompt({ path: file, operation, oursLabel, theirsLabel, conflicts }) {
+  const system = [
+    'You resolve Git merge conflicts.',
+    'For each conflict you get the lines from OURS (the side already checked out), THEIRS (the side being brought in), the common BASE when Git knows it, and a few lines of context before and after.',
+    'Write the lines that should replace the whole conflict. Keep what both sides meant to do: when the changes are compatible, combine them; when they truly contradict, choose the side that is more complete or more deliberate and say why.',
+    'Never output conflict markers. Keep the file’s indentation, quotes and style. Don’t add comments about the merge, and don’t repeat the context lines.',
+    'Reply with JSON only, no prose and no code fences: {"resolutions":[{"conflict":1,"lines":["…"],"why":"one short sentence","confidence":"high"}]} with one entry per conflict. confidence is high, medium or low: low when you had to guess.',
+  ].join('\n');
+  const block = (lines) => {
+    const list = (lines || []).slice(0, CONFLICT_LINES);
+    const cut = (lines || []).length > CONFLICT_LINES ? `\n… ${lines.length - CONFLICT_LINES} more lines` : '';
+    return `\`\`\`\n${list.join('\n')}${cut}\n\`\`\``;
+  };
+  const head = [
+    `File: ${String(file).slice(0, 300)}`,
+    `What happened: ${String(operation || 'merge').slice(0, 200)}`,
+    `OURS is labelled “${String(oursLabel || 'HEAD').slice(0, 120)}”; THEIRS is labelled “${String(theirsLabel || 'incoming').slice(0, 120)}”.`,
+  ].join('\n');
+  let user = head;
+  for (const c of conflicts) {
+    const part = [
+      `\n\nConflict ${c.index + 1}`,
+      c.before && c.before.length ? `Context before:\n${block(c.before)}` : '',
+      `OURS:\n${block(c.ours)}`,
+      c.base ? `BASE:\n${block(c.base)}` : '',
+      `THEIRS:\n${block(c.theirs)}`,
+      c.after && c.after.length ? `Context after:\n${block(c.after)}` : '',
+    ].filter(Boolean).join('\n');
+    if (user.length + part.length > CONFLICT_CHARS) {
+      user += `\n\n(The file has more conflicts; resolve the ones above.)`;
+      break;
+    }
+    user += part;
+  }
+  return { system, user };
+}
+
 /** Clean a model's reply into { summary, description }. */
 function parseMessage(text) {
   let t = String(text || '').replace(/\r\n?/g, '\n').trim();
@@ -195,7 +240,7 @@ function requireKey(provider, key) {
 }
 
 /** Ask the provider to write the message; resolves with the reply text. */
-async function complete({ provider: id, key, model, baseUrl }, { system, user }, fetchImpl, { timeout = TIMEOUT_MS } = {}) {
+async function complete({ provider: id, key, model, baseUrl }, { system, user }, fetchImpl, { timeout = TIMEOUT_MS, maxTokens = 1024 } = {}) {
   const provider = PROVIDER[id];
   if (!provider) throw new AiError('Choose an AI provider first.', 'AI_CONFIG');
   requireKey(provider, key);
@@ -208,7 +253,7 @@ async function complete({ provider: id, key, model, baseUrl }, { system, user },
       const j = await call(fetchImpl, `${base}/messages`, {
         method: 'POST',
         headers: headersFor(provider, key),
-        body: JSON.stringify({ model: m, max_tokens: 1024, system, messages: [{ role: 'user', content: user }] }),
+        body: JSON.stringify({ model: m, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }] }),
       }, provider, t.signal);
       return (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
     }
@@ -338,4 +383,4 @@ class KeyVault {
   }
 }
 
-module.exports = { PROVIDERS, PROVIDER, AiError, condenseDiff, buildPrompt, buildThemePrompt, THEME_KEYS, parseMessage, complete, listModels, KeyVault };
+module.exports = { PROVIDERS, PROVIDER, AiError, condenseDiff, buildPrompt, buildThemePrompt, buildConflictPrompt, THEME_KEYS, parseMessage, complete, listModels, KeyVault };

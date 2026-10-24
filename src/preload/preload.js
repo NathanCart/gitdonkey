@@ -7,7 +7,7 @@ const INVOKE = new Set([
   'app:info', 'repo:open', 'repo:close', 'repo:init', 'repo:clone', 'dialog:pickFolder',
   'store:get', 'store:set', 'recent:list', 'recent:remove', 'shell:openPath', 'shell:showItem',
   'shell:openExternal', 'shell:openTerminal', 'clipboard:write', 'watch:set', 'window:setTitle', 'avatar:get', 'avatar:clear', 'askpass:reply', 'credentials:status', 'credentials:remember',
-  'ai:providers', 'ai:setKey', 'ai:models', 'ai:generate', 'ai:theme', 'theme:remember', 'app:relaunch',
+  'ai:providers', 'ai:setKey', 'ai:models', 'ai:generate', 'ai:theme', 'ai:resolve', 'theme:remember', 'app:relaunch',
 ]);
 const EVENTS = new Set(['repo:changed', 'git:progress', 'clone:progress', 'menu', 'open-path', 'window:focus', 'askpass:request', 'update:state']);
 

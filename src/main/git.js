@@ -46,12 +46,24 @@ class GitError extends Error {
   }
 }
 
+/** Files still in conflict, said plainly. */
+function unmergedError(paths) {
+  const names = paths.map((p) => p.split('/').pop());
+  const list = names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(' and ');
+  const e = new GitError(`${paths.length === 1 ? '1 file is' : `${paths.length} files are`} still conflicted (${list}). Resolve ${paths.length === 1 ? 'it' : 'them'}, or mark ${paths.length === 1 ? 'it' : 'them'} resolved, then try again.`);
+  e.kind = 'UNMERGED';
+  e.files = paths;
+  return e;
+}
+
 function classifyError(text) {
   if (/Author identity unknown|Please tell me who you are|empty ident name/i.test(text)) return 'NO_IDENTITY';
   if (/\[rejected\]|non-fast-forward|\(fetch first\)|Updates were rejected|stale info/i.test(text)) return 'PUSH_REJECTED';
   if (/has no upstream branch|no tracking information/i.test(text)) return 'NO_UPSTREAM';
   if (/would be overwritten by|Please commit your changes or stash them|You have unstaged changes|Your index contains uncommitted changes/i.test(text)) return 'DIRTY_WORKTREE';
   if (/not fully merged/i.test(text)) return 'NOT_MERGED';
+  // Git refusing to touch the index while files are mid-conflict ("f: needs merge", "could not write index").
+  if (/needs merge|you need to resolve your current index first|could not write index/i.test(text)) return 'UNMERGED';
   if (/Authentication failed|could not read Username|Permission denied \(publickey|terminal prompts disabled|Host key verification failed/i.test(text)) return 'AUTH';
   if (/Not possible to fast-forward|not possible to fast-forward|Diverging branches can't be fast-forwarded/i.test(text)) return 'NOT_FF';
   if (/CONFLICT/.test(text)) return 'CONFLICT';
@@ -1161,7 +1173,15 @@ class GitRepo {
 
   // ------------------------------------------------------------ stash
 
+  /** Paths with unresolved conflicts. */
+  async unmergedPaths() {
+    return (await this.text(['diff', '--name-only', '--diff-filter=U', '-z'])).split('\0').filter(Boolean);
+  }
+
   async stashSave({ message = '', includeUntracked = true, keepIndex = false } = {}) {
+    // Git can't stash a half-merged index and only says "could not write index".
+    const unmerged = await this.unmergedPaths();
+    if (unmerged.length) throw unmergedError(unmerged);
     const args = ['stash', 'push'];
     if (includeUntracked) args.push('--include-untracked');
     if (keepIndex) args.push('--keep-index');

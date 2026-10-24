@@ -629,3 +629,27 @@ test('cherry-pick conflict and continue / revert of a merge commit', async () =>
   await repo.revert(git(dir, 'rev-parse', 'HEAD'));
   assert.equal(fs.existsSync(path.join(dir, 'z.txt')), false);
 });
+
+test('stash with conflicted files says so instead of “could not write index”', async () => {
+  const dir = newRepo();
+  write(dir, 'f.txt', 'a\nb\nc\n');
+  write(dir, 'g.txt', 'x\n');
+  git(dir, 'add', '.');
+  git(dir, 'commit', '-qm', 'init');
+  write(dir, 'f.txt', 'a\nSTASH\nc\n');
+  write(dir, 'g.txt', 'x\ny\n');
+  git(dir, 'stash', '-q');
+  write(dir, 'f.txt', 'a\nHEAD\nc\n');
+  git(dir, 'commit', '-qam', 'head');
+  try {
+    git(dir, 'stash', 'pop');
+  } catch {
+    // A conflicting pop exits 1 and keeps the stash, like the one in the bug report.
+  }
+  const repo = new GitRepo(dir);
+  await assert.rejects(() => repo.stashSave({ includeUntracked: true }), (e) => e.kind === 'UNMERGED' && /1 file is still conflicted \(f\.txt\)/.test(e.message) && e.files.join() === 'f.txt');
+  assert.equal(git(dir, 'stash', 'list').trim().split('\n').length, 1, 'nothing stashed, the popped stash kept');
+  // Git's own wording is classified the same way, for the other commands that hit it.
+  const raw = new GitError('could not write index', { stderr: 'error: could not write index\nf.txt: needs merge' });
+  assert.equal(raw.kind, 'UNMERGED');
+});

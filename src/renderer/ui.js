@@ -20,19 +20,31 @@ export function mountToast(el) {
   toasts().appendChild(el);
 }
 
+// Toasts on screen by what they say, so saying it again counts up instead of stacking.
+const showing = new Map();
+
 export function toast({ type = 'info', title, message, detail, actions = [], timeout } = {}) {
   toasts();
+  const key = `${type}\n${title}\n${message || ''}`;
+  const same = showing.get(key);
+  if (same) {
+    same.again();
+    return same;
+  }
   const ledState = { success: 'green', error: 'red', warn: 'amber', info: 'cyan' }[type] || 'cyan';
   let timer = null;
+  let count = 1;
   const close = () => {
     clearTimeout(timer);
+    showing.delete(key);
     el.classList.add('out');
     setTimeout(() => el.remove(), 90);
   };
+  const badge = h('span', { class: 'toast-count', hidden: true });
   const el = h('div', { class: ['toast', `toast-${type}`] },
     h('div', { class: 'toast-head' },
       led(ledState),
-      h('div', { class: 'toast-title' }, title || ''),
+      h('div', { class: 'toast-title' }, title || '', badge),
       h('button', { class: 'icon-btn toast-x', title: 'Dismiss', 'aria-label': 'Dismiss', onClick: close }, icon('x', { size: 14 }))),
     message ? h('div', { class: 'toast-msg' }, message) : null,
     detail ? h('pre', { class: 'toast-detail' }, detail) : null,
@@ -45,9 +57,14 @@ export function toast({ type = 'info', title, message, detail, actions = [], tim
           },
         }, a.label)))
       : null);
+  el.dataset.key = key;
   toastStack.appendChild(el);
   const passing = [...toastStack.children].filter((c) => !c.classList.contains('toast-pinned'));
-  while (passing.length > 5) passing.shift().remove();
+  while (passing.length > 5) {
+    const old = passing.shift();
+    showing.delete(old.dataset.key);
+    old.remove();
+  }
   const ms = timeout ?? (type === 'error' ? 12000 : type === 'warn' ? 8000 : 4500);
   if (ms > 0) {
     timer = setTimeout(close, ms);
@@ -56,7 +73,23 @@ export function toast({ type = 'info', title, message, detail, actions = [], tim
       timer = setTimeout(close, 3000);
     });
   }
-  return { close };
+  const api = {
+    close,
+    again: () => {
+      count += 1;
+      badge.hidden = false;
+      badge.textContent = `×${count}`;
+      el.classList.remove('bump');
+      void el.offsetWidth; // restart the nudge
+      el.classList.add('bump');
+      if (ms > 0) {
+        clearTimeout(timer);
+        timer = setTimeout(close, ms);
+      }
+    },
+  };
+  showing.set(key, api);
+  return api;
 }
 
 // ---------------------------------------------------------------- modals

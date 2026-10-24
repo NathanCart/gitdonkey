@@ -34,6 +34,8 @@ Familiar GitKraken layout and interaction model (tabs, toolbar, left refs sideba
 
 - Commit graph (all branches, remotes and tags) with WIP row, ref pills, search, infinite loading.
 - Staging at file, hunk and line level; discard; commit and amend; message-only amend.
+- AI conflict resolution (opt-in, same provider and key): Resolve with AI in the merge tool sends the open conflicts with their base and context, and shows a suggestion per conflict with a reason and confidence; nothing is applied until the user uses it.
+- Stashing with conflicted files explains itself ("2 files are still conflicted … resolve them first") with a way to the conflicts, instead of Git's "could not write index"; repeated identical toasts count up on one card.
 - AI commit messages (opt-in): the user picks a provider (OpenAI, Anthropic, OpenRouter, Google Gemini, Ollama, or any OpenAI-compatible endpoint) and brings their own key, kept encrypted by the OS keychain. The staged diff is sent only when they press Generate.
 - Branches: create, checkout (local, remote-tracking, detached), rename, delete, set upstream, fast-forward, merge, rebase, interactive rebase (reword, squash, fixup, drop), cherry-pick, revert, reset soft/mixed/hard.
 - Drag a branch onto another to merge, rebase, fast-forward or push.

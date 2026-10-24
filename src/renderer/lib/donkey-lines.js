@@ -50,6 +50,7 @@ export const LINES = {
 
   theme: ['Ooh, {name}. Very me.', '{name}? I look great in this.', 'New coat. Hee-haw.'],
   aiMessage: ['A robot wrote that. I could’ve done it.', 'Fine, the AI’s good. I’m still cuter.'],
+  aiResolve: ['A robot read your conflicts. Check its homework.', 'AI suggestions are in. Trust, but verify.'],
   update: ['There’s a newer me! Version {version}.', '{version} is out. Same donkey, better hay.'],
   openRepo: ['{name}. Nice stable.', 'Ooh, {name}. Let’s have a look.'],
   manyChanges: ['{count} changes? Commit early, commit often.', '{count} changes. I’m not carrying all that at once.'],

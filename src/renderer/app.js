@@ -816,7 +816,9 @@ class App {
       }
       this.lastError = null;
       if (r && r.conflicts) {
-        toast({ type: 'warn', title: `${label}: conflicts`, message: `${pluralize(r.files ? r.files.length : 1, 'file')} need${r.files && r.files.length === 1 ? 's' : ''} resolving. Open each one from the panel, then continue.` });
+        const n = r.files ? r.files.length : 1;
+        const kept = /^Pop stash/.test(label) ? ' Git keeps the stash when a pop conflicts, so delete it once you’re happy.' : '';
+        toast({ type: 'warn', title: `${label}: conflicts`, message: `${pluralize(n, 'file')} need${n === 1 ? 's' : ''} resolving. Open each one from the panel, then continue.${kept}`, timeout: kept ? 14000 : undefined });
         this.tab.ui.selection = { type: 'wip' };
         this.details = null;
       } else if (success) {
@@ -851,6 +853,10 @@ class App {
           : 'The server refused the username or token. GitDonkey will ask again on your next try; for GitHub use a personal access token, not your password.',
         detail: e.message,
       });
+      return;
+    }
+    if (kind === 'UNMERGED') {
+      this.conflictsInTheWay(label, e.message);
       return;
     }
     if (kind === 'DIRTY_WORKTREE') {
@@ -1332,8 +1338,28 @@ class App {
 
   // ------------------------------------------------------------ stashes
 
+  /** Git won't do `label` while files are mid-conflict: say so, and offer the way to them. */
+  conflictsInTheWay(label, message) {
+    const st = this.data && this.data.status;
+    const files = (st && st.conflicted) || [];
+    const names = files.map((f) => f.path.split('/').pop());
+    const list = names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(' and ');
+    toast({
+      type: 'error',
+      title: `Can’t ${label.toLowerCase()} with conflicts`,
+      message: files.length
+        ? `${files.length === 1 ? '1 file is' : `${files.length} files are`} still conflicted (${list}). Resolve ${files.length === 1 ? 'it' : 'them'}, or mark ${files.length === 1 ? 'it' : 'them'} resolved, first.`
+        : message || 'Some files are still conflicted. Resolve them, or mark them resolved, first.',
+      actions: files.length ? [{ label: 'Show conflicts', primary: true, run: () => this.openFile({ kind: 'conflict', path: files[0].path, status: 'U', conflict: files[0].conflict }) }] : [],
+    });
+  }
+
   async stash() {
     const st = this.data && this.data.status;
+    if (st && st.conflicted.length) {
+      this.conflictsInTheWay('Stash');
+      return;
+    }
     if (!st || !(st.staged.length + st.unstaged.length)) {
       toast({ type: 'info', title: 'Nothing to stash' });
       return;

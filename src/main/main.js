@@ -13,7 +13,7 @@ const { AskpassServer } = require('./askpass');
 const { Store } = require('./store');
 const { RepoWatcher } = require('./watcher');
 const { AvatarService } = require('./avatars');
-const { PROVIDERS, PROVIDER, AiError, buildPrompt, buildThemePrompt, parseMessage, complete, listModels, KeyVault } = require('./ai');
+const { PROVIDERS, PROVIDER, AiError, buildPrompt, buildThemePrompt, buildConflictPrompt, parseMessage, complete, listModels, KeyVault } = require('./ai');
 const { Updater } = require('./updater');
 
 // Methods of GitRepo the renderer may call.
@@ -490,6 +490,21 @@ function registerIpc() {
       return fail(e);
     }
   });
+  ipcMain.handle('ai:resolve', async (_e, { provider, model, baseUrl, path: file, operation, oursLabel, theirsLabel, conflicts } = {}) => {
+    try {
+      const lines = (x) => Array.isArray(x) && x.every((l) => typeof l === 'string');
+      if (typeof file !== 'string' || !Array.isArray(conflicts) || !conflicts.length || conflicts.length > 200) throw new AiError('Nothing to resolve.', 'AI_CONFIG');
+      const clean = conflicts.map((c) => {
+        if (!c || !Number.isInteger(c.index) || !lines(c.ours) || !lines(c.theirs) || (c.base !== null && c.base !== undefined && !lines(c.base))) throw new AiError('Those conflicts couldn’t be read.', 'AI_CONFIG');
+        return { index: c.index, ours: c.ours, theirs: c.theirs, base: c.base || null, before: lines(c.before) ? c.before : [], after: lines(c.after) ? c.after : [] };
+      });
+      const prompt = buildConflictPrompt({ path: file, operation, oursLabel, theirsLabel, conflicts: clean });
+      return ok(await complete({ provider, key: vault.require(provider), model, baseUrl }, prompt, aiFetch, { maxTokens: 8192, timeout: 120000 }));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
   ipcMain.handle('ai:theme', async (_e, { provider, model, baseUrl, description } = {}) => {
     try {
       if (typeof description !== 'string' || !description.trim()) throw new AiError('Describe the theme you want first.', 'AI_CONFIG');

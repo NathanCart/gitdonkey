@@ -900,7 +900,9 @@ button.blame-gutter:hover { background: var(--panel-3); color: var(--legend); }
 .blame-gutter.uncommitted .blame-summary { color: var(--amber); font-style: italic; }
 
 /* Merge tool */
-.merge-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--seam); user-select: none; }
+.merge-bar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--seam); user-select: none; }
+.merge-bar .spacer { flex: 1 0 0; }
+.merge-bar > .btn-key { margin-left: auto; }
 .merge-progress { display: flex; align-items: center; gap: 12px; min-width: 220px; }
 .mp-count { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .merge-progress .mp-track { width: 120px; flex: none; }
@@ -926,6 +928,18 @@ button.blame-gutter:hover { background: var(--panel-3); color: var(--legend); }
 .side.theirs .code-block { background: color-mix(in srgb, var(--violet) 7%, transparent); }
 .conflict.resolved { border-color: color-mix(in srgb, var(--green) 40%, transparent); }
 .conflict.resolved .code-block { background: color-mix(in srgb, var(--green) 6%, transparent); border-radius: 0; }
+/* AI conflict suggestions: violet, the AI's colour here, and never applied until chosen. */
+.ai-resolve svg { color: var(--violet); }
+.ai-note { display: flex; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--violet) 35%, transparent); border-radius: var(--radius); background: color-mix(in srgb, var(--violet) 9%, var(--panel)); color: var(--legend-2); font-size: 12px; line-height: 1.45; }
+.ai-note svg { flex: none; color: var(--violet); }
+.ai-note.bad { border-color: color-mix(in srgb, var(--red) 40%, transparent); background: color-mix(in srgb, var(--red) 9%, var(--panel)); color: var(--legend); }
+.ai-note.bad svg { color: var(--red); }
+.ai-suggestion { border-top: 1px solid var(--seam); background: color-mix(in srgb, var(--violet) 5%, var(--panel)); }
+.ai-sug-head { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px 0 12px; color: var(--legend); font: 600 12px var(--font-ui); user-select: none; }
+.ai-sug-head > svg { color: var(--violet); }
+.ai-conf { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; color: var(--legend-3); font-weight: 500; }
+.ai-why { margin: 0 12px 8px; color: var(--legend-2); font-size: 12px; line-height: 1.45; user-select: text; }
+.code-block.ai { background: color-mix(in srgb, var(--violet) 7%, transparent); border-radius: 0; }
 .merge-editor { display: block; width: calc(100% - 28px); height: calc(100% - 80px); min-height: 360px; margin: 14px; font-size: 12.5px; line-height: 20px; resize: none; white-space: pre; }
 
 /* ------------------------------------------------------------------ welcome */
@@ -1027,6 +1041,10 @@ body.show-welcome .toasts, body.no-panel .toasts { right: 16px; }
 .toast-detail { margin: 8px 0 0 16px; }
 .toast-actions { display: flex; gap: 6px; margin: 10px 0 0 16px; }
 .toast-error { border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.toast-count { margin-left: 8px; padding: 0 6px; border-radius: 8px; background: var(--panel-4); color: var(--legend-2); font: 600 11px var(--font-mono); vertical-align: 1px; }
+.toast-count[hidden] { display: none; }
+.toast.bump { animation: toast-bump 160ms steps(2, jump-end); }
+@keyframes toast-bump { 50% { transform: translateX(-4px); } }
 
 /* Update notice: a toast that waits for an answer. Cyan is "behind", as on the Pull key.
    Toasts float above modals; this one steps aside while a dialog is open so it never covers its keys. */

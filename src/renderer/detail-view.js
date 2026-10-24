@@ -1,11 +1,12 @@
 // Center detail view: diff (unified / split, hunk + line staging), file,
 // history, blame, and the conflict merge tool.
-import { h, icon, clear, legend, statusBadge, avatar, authorColor } from './dom.js';
+import { h, icon, clear, legend, statusBadge, avatar, authorColor, led } from './dom.js';
 import { parseDiff, buildPatch, splitRows } from './lib/diff-parse.js';
-import { parseConflicts, resolveConflicts, conflictCount } from './lib/conflicts.js';
+import { parseConflicts, resolveConflicts, conflictCount, conflictContext, parseResolutionReply } from './lib/conflicts.js';
 import { splitPath, languageFor, imageMime, shortHash, relativeTime, fullDate, pluralize } from './lib/util.js';
-import { git } from './api.js';
+import { git, invoke } from './api.js';
 import { confirmDialog } from './ui.js';
+import { aiSettingsDialog } from './dialogs.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 
 const MAX_HIGHLIGHT_LINES = 6000;
@@ -460,7 +461,7 @@ export class DetailView {
       ]));
       return;
     }
-    this.merge = { segments, resolutions: [], manual: false, text };
+    this.merge = { segments, resolutions: [], manual: false, text, suggestions: new Map(), ai: null };
     this.renderMerge();
   }
 
@@ -478,6 +479,7 @@ export class DetailView {
         h('span', { class: 'mp-count' }, `${done} of ${pluralize(total, 'conflict')} resolved`),
         h('span', { class: 'mp-track' }, h('span', { class: 'mp-fill', style: { width: `${(done / total) * 100}%` } }))),
       h('span', { class: 'spacer' }),
+      this.aiButtons(),
       h('button', { class: 'btn btn-small', onClick: () => this.app.resolveConflict(s.path, 'ours') }, 'Take all ours'),
       h('button', { class: 'btn btn-small', onClick: () => this.app.resolveConflict(s.path, 'theirs') }, 'Take all theirs'),
       h('button', { class: ['btn', 'btn-small', m.manual && 'on'], 'aria-pressed': String(m.manual), onClick: () => {
@@ -487,6 +489,9 @@ export class DetailView {
       } }, icon('pencil', { size: 13 }), 'Edit output'),
       h('button', { class: 'btn btn-small btn-key', onClick: () => this.saveMerge() }, 'Save & mark resolved'));
     this.body.appendChild(bar);
+    if (m.ai && m.ai.status) {
+      this.body.appendChild(h('div', { class: ['ai-note', m.ai.bad && 'bad'], role: 'status' }, icon('sparkles', { size: 13 }), h('span', null, m.ai.status)));
+    }
 
     if (m.manual) {
       const ta = h('textarea', { class: 'input merge-editor mono', spellcheck: 'false' }, m.manualText);
@@ -513,8 +518,8 @@ export class DetailView {
         this.renderMerge();
       };
       if (r) {
-        const lines = r === 'ours' ? seg.ours : r === 'theirs' ? seg.theirs : r === 'both' ? [...seg.ours, ...seg.theirs] : [...seg.theirs, ...seg.ours];
-        const label = { ours: 'Kept ours', theirs: 'Kept theirs', both: 'Kept both (ours first)', 'both-theirs-first': 'Kept both (theirs first)' }[r];
+        const lines = r.lines || (r === 'ours' ? seg.ours : r === 'theirs' ? seg.theirs : r === 'both' ? [...seg.ours, ...seg.theirs] : [...seg.theirs, ...seg.ours]);
+        const label = r.lines ? 'Kept the AI suggestion' : { ours: 'Kept ours', theirs: 'Kept theirs', both: 'Kept both (ours first)', 'both-theirs-first': 'Kept both (theirs first)' }[r];
         wrap.appendChild(h('div', { class: 'conflict resolved' },
           h('div', { class: 'conflict-head' }, h('span', { class: 'led led-green' }), h('span', null, `Conflict ${idx + 1} · ${label}`), h('span', { class: 'spacer' }), h('button', { class: 'btn btn-tiny', onClick: () => choose(undefined) }, 'Change')),
           codeBlock(lines, hl, 'res')));
@@ -530,9 +535,104 @@ export class DetailView {
             codeBlock(seg.ours, hl, 'ours')),
           h('div', { class: 'side theirs' },
             h('div', { class: 'side-head' }, legend(theirsName), h('span', { class: 'side-ref mono' }, seg.theirsLabel), h('span', { class: 'spacer' }), h('button', { class: 'btn btn-tiny btn-key', onClick: () => choose('theirs') }, 'Use theirs')),
-            codeBlock(seg.theirs, hl, 'theirs')))));
+            codeBlock(seg.theirs, hl, 'theirs'))),
+        this.suggestionBlock(idx, hl)));
     }
     this.body.appendChild(wrap);
+  }
+
+  // ------------------------------------------------------------ AI suggestions
+
+  aiButtons() {
+    const m = this.merge;
+    const ai = this.app.aiConfig();
+    const open = conflictContext(m.segments).filter((c) => !m.resolutions[c.index]);
+    const ready = [...m.suggestions.keys()].filter((i) => !m.resolutions[i]);
+    const busy = Boolean(m.ai && m.ai.busy);
+    return [
+      ready.length > 1 ? h('button', { class: 'btn btn-small', dataset: { action: 'ai-use-all' }, onClick: () => {
+        for (const i of ready) m.resolutions[i] = { lines: m.suggestions.get(i).lines };
+        this.renderMerge();
+      } }, `Use ${ready.length} suggestions`) : null,
+      h('button', {
+        class: 'btn btn-small ai-resolve',
+        dataset: { action: 'ai-resolve' },
+        disabled: busy || m.manual || !open.length,
+        'aria-busy': busy ? 'true' : null,
+        title: ai ? `Suggest a resolution for each conflict with ${ai.label}. Nothing changes until you use one.` : 'Uses the same AI provider and key as AI commit messages',
+        onClick: () => this.aiResolve(),
+      }, icon('sparkles', { size: 13 }), busy ? 'Thinking…' : ai ? 'Resolve with AI' : 'Set up AI…'),
+    ];
+  }
+
+  suggestionBlock(idx, hl) {
+    const m = this.merge;
+    const sug = m.suggestions.get(idx);
+    if (!sug) return null;
+    const use = () => {
+      m.resolutions[idx] = { lines: sug.lines };
+      this.renderMerge();
+    };
+    const edit = () => {
+      m.resolutions[idx] = { lines: sug.lines };
+      m.manual = true;
+      m.manualText = resolveConflicts(m.segments, m.resolutions);
+      this.renderMerge();
+    };
+    const dismiss = () => {
+      m.suggestions.delete(idx);
+      this.renderMerge();
+    };
+    const lamp = { high: 'green', medium: 'amber', low: 'red' }[sug.confidence];
+    return h('div', { class: 'ai-suggestion', dataset: { conflict: String(idx + 1) } },
+      h('div', { class: 'ai-sug-head' }, icon('sparkles', { size: 13 }), h('span', null, 'AI suggestion'),
+        h('span', { class: 'ai-conf', title: 'How sure the model says it is' }, led(lamp), `${sug.confidence} confidence`),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn btn-tiny', onClick: dismiss }, 'Dismiss'),
+        h('button', { class: 'btn btn-tiny', onClick: edit }, 'Edit'),
+        h('button', { class: 'btn btn-tiny btn-key', onClick: use }, 'Use suggestion')),
+      sug.why ? h('p', { class: 'ai-why' }, sug.why) : null,
+      codeBlock(sug.lines, hl, 'ai'));
+  }
+
+  /** Ask the AI commit-message provider for a resolution of every open conflict; they come back as suggestions. */
+  async aiResolve() {
+    const m = this.merge;
+    const s = this.spec;
+    const ai = this.app.aiConfig();
+    if (!ai) {
+      await aiSettingsDialog(this.app);
+      if (this.merge === m) this.renderMerge();
+      return;
+    }
+    const all = conflictContext(m.segments);
+    const open = all.filter((c) => !m.resolutions[c.index]);
+    if (!open.length) return;
+    const op = this.app.data && this.app.data.opState;
+    const first = open[0];
+    const operation = op ? `a ${op.type} is in progress` : /stash/i.test(`${first.oursLabel} ${first.theirsLabel}`) ? 'a stash was applied on top of local changes' : 'a merge';
+    m.ai = { busy: true, status: `Asking ${ai.label} about ${pluralize(open.length, 'conflict')}…` };
+    this.renderMerge();
+    try {
+      const text = await invoke('ai:resolve', {
+        provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, path: s.path, operation,
+        oursLabel: first.oursLabel, theirsLabel: first.theirsLabel,
+        conflicts: open.map((c) => ({ index: c.index, ours: c.ours, base: c.base, theirs: c.theirs, before: c.before, after: c.after })),
+      });
+      const got = parseResolutionReply(text, all.length);
+      let added = 0;
+      for (const [i, sug] of got) {
+        if (m.resolutions[i]) continue;
+        m.suggestions.set(i, sug);
+        added++;
+      }
+      const left = open.length - added;
+      m.ai = { status: `${pluralize(added, 'suggestion')} from ${ai.label}${left ? `, ${left} left for you` : ''}. Read each one before you use it; nothing changes until you do.` };
+      if (this.app.donkey) this.app.donkey.react('aiResolve');
+    } catch (e) {
+      m.ai = { status: e.message || 'That didn’t work. Try again.', bad: true };
+    }
+    if (this.merge === m) this.renderMerge();
   }
 
   async saveMerge() {

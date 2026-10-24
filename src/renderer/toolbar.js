@@ -65,7 +65,8 @@ export function renderToolbar(el, app) {
       key({ id: 'push', ico: 'arrow-up-from-line', label: 'Push', title: `Push (${kb('⌘⇧P')})`, onClick: () => app.push(), badge: branch && branch.ahead ? branch.ahead : null, badgeKind: 'ahead', disabled: !d })),
     h('div', { class: 'key-group' },
       key({ id: 'branch', ico: 'git-branch', label: 'Branch', title: `Create branch (${kb('⌘B')})`, onClick: () => app.createBranch(), disabled: !d || head.unborn }),
-      key({ id: 'stash', ico: 'archive', label: 'Stash', title: `Stash changes (${kb('⌘⌥S')})`, onClick: () => app.stash(), disabled: !dirty }),
+      // Conflicted files count too: pressing Stash then says why it can't.
+      key({ id: 'stash', ico: 'archive', label: 'Stash', title: `Stash changes (${kb('⌘⌥S')})`, onClick: () => app.stash(), disabled: !dirty && !(d && d.status.conflicted.length) }),
       key({ id: 'pop', ico: 'archive-restore', label: 'Pop', title: `Pop latest stash (${kb('⌘⌥P')})`, onClick: () => app.popStash(), disabled: !d || !d.stashes.length, badge: d && d.stashes.length > 1 ? d.stashes.length : null, badgeKind: 'neutral' })));
 
   const right = h('div', { class: 'tb-right' },
