@@ -3,12 +3,13 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const INVOKE = new Set([
+  'update:state', 'update:check', 'update:download', 'update:cancel', 'update:install', 'update:skip',
   'app:info', 'repo:open', 'repo:close', 'repo:init', 'repo:clone', 'dialog:pickFolder',
   'store:get', 'store:set', 'recent:list', 'recent:remove', 'shell:openPath', 'shell:showItem',
   'shell:openExternal', 'shell:openTerminal', 'clipboard:write', 'watch:set', 'window:setTitle', 'avatar:get', 'avatar:clear', 'askpass:reply', 'credentials:status', 'credentials:remember',
   'ai:providers', 'ai:setKey', 'ai:models', 'ai:generate',
 ]);
-const EVENTS = new Set(['repo:changed', 'git:progress', 'clone:progress', 'menu', 'open-path', 'window:focus', 'askpass:request']);
+const EVENTS = new Set(['repo:changed', 'git:progress', 'clone:progress', 'menu', 'open-path', 'window:focus', 'askpass:request', 'update:state']);
 
 contextBridge.exposeInMainWorld('gitdonkey', {
   git: (repo, method, ...args) => ipcRenderer.invoke('git', { repo, method, args }),

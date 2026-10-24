@@ -14,6 +14,7 @@ const { Store } = require('./store');
 const { RepoWatcher } = require('./watcher');
 const { AvatarService } = require('./avatars');
 const { PROVIDERS, PROVIDER, AiError, buildPrompt, parseMessage, complete, listModels, KeyVault } = require('./ai');
+const { Updater } = require('./updater');
 
 // Methods of GitRepo the renderer may call.
 const GIT_METHODS = new Set([
@@ -41,6 +42,7 @@ let askpass = null;
 let githubCli = null;
 let vault = null;
 const aiFetch = (url, init) => net.fetch(url, init);
+let updater = null;
 const askpassWaiters = new Map();
 
 /** Show the renderer's sign-in dialog for a Git / SSH prompt. */
@@ -146,6 +148,35 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
+/** The .app this process runs from, when it's an installed bundle GitDonkey may replace with a new version. */
+function updatableBundle() {
+  if (process.platform !== 'darwin') return null;
+  if (process.env.GITDONKEY_UPDATE_BUNDLE) return process.env.GITDONKEY_UPDATE_BUNDLE;
+  if (!app.isPackaged) return null;
+  const bundle = path.resolve(process.execPath, '../../..');
+  return bundle.endsWith('.app') ? bundle : null;
+}
+
+function createUpdater() {
+  const feed = process.env.GITDONKEY_UPDATE_FEED;
+  updater = new Updater({
+    fetch: (url, init) => net.fetch(url, init),
+    store,
+    dir: path.join(app.getPath('userData'), 'updates'),
+    version: app.getVersion(),
+    // An Intel build running under Rosetta is offered the Apple Silicon one.
+    arch: app.runningUnderARM64Translation ? 'arm64' : process.arch,
+    feedUrl: feed || undefined,
+    offline: Boolean(process.env.GITDONKEY_OFFLINE) && !feed,
+    bundle: updatableBundle(),
+    packaged: app.isPackaged,
+    firstCheck: Number(process.env.GITDONKEY_UPDATE_DELAY) || undefined,
+    openPath: (p) => shell.openPath(p),
+    quit: () => app.quit(),
+  });
+  updater.on('state', (s) => send('update:state', s));
+}
+
 function menuCommand(command) {
   return () => send('menu', { command });
 }
@@ -158,6 +189,7 @@ function buildMenu() {
           label: 'GitDonkey',
           submenu: [
             { role: 'about' },
+            { label: 'Check for Updates…', click: menuCommand('check-updates') },
             { type: 'separator' },
             { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: menuCommand('settings') },
             { label: 'AI Commit Messages…', click: menuCommand('ai-settings') },
@@ -244,7 +276,10 @@ function buildMenu() {
     { role: 'windowMenu' },
     {
       role: 'help',
-      submenu: [{ label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: menuCommand('shortcuts') }],
+      submenu: [
+        { label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: menuCommand('shortcuts') },
+        ...(isMac ? [] : [{ type: 'separator' }, { label: 'Check for Updates…', click: menuCommand('check-updates') }]),
+      ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -283,6 +318,34 @@ function registerIpc() {
     home: app.getPath('home'),
     launchPaths: [...launchPaths(process.argv), ...pendingOpen.splice(0)],
   }));
+
+  ipcMain.handle('update:state', () => updater.state());
+  ipcMain.handle('update:check', async () => {
+    try {
+      return ok(await updater.check({ manual: true }));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('update:download', () => {
+    updater.download();
+    return updater.state();
+  });
+  ipcMain.handle('update:cancel', () => {
+    updater.cancel();
+    return true;
+  });
+  ipcMain.handle('update:install', async () => {
+    try {
+      return ok(await updater.install());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('update:skip', (_e, version) => {
+    updater.skip(typeof version === 'string' ? version : null);
+    return true;
+  });
 
   ipcMain.handle('repo:open', async (_e, dir) => {
     if (typeof dir !== 'string' || !path.isAbsolute(dir)) return fail(new Error('Invalid folder'));
@@ -448,6 +511,7 @@ if (!gotLock) {
       githubCli = gh;
       if (gh) configureGit({ config: githubCliCredentialConfig(gh) });
     });
+    createUpdater();
     watcher = new RepoWatcher((root) => send('repo:changed', { root }));
     avatars = new AvatarService(path.join(app.getPath('userData'), 'avatars'), (url, init) => net.fetch(url, init), { offline: Boolean(process.env.GITDONKEY_OFFLINE) });
     registerIpc();
@@ -457,6 +521,7 @@ if (!gotLock) {
       if (!img.isEmpty()) app.dock.setIcon(img);
     }
     createWindow();
+    updater.start();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -466,6 +531,7 @@ if (!gotLock) {
     if (store) store.flush();
     if (watcher) watcher.closeAll();
     if (askpass) askpass.stop();
+    if (updater) updater.stop();
   });
 
   app.on('window-all-closed', () => {

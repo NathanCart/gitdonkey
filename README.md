@@ -24,6 +24,18 @@ The builds are not code-signed yet, so the first launch needs one extra click:
 - **macOS**: open the app once, then go to System Settings → Privacy & Security and click **Open Anyway**.
 - **Windows**: on the SmartScreen prompt click **More info** → **Run anyway**.
 
+## Updates
+
+GitDonkey looks for a new release on GitHub when it starts and every six hours. When there is one, a card shows the new version and its release notes, with **Update**, **Later** and **Skip this version**; after **Later**, a key on the status strip brings the card back. **Check for Updates…** (in the GitDonkey menu on macOS, the Help menu on Windows) checks straight away, even for a version you skipped, and Settings has a switch to stop the automatic checks. A check is one anonymous request to the GitHub API; nothing about you or your repositories is sent.
+
+**Update** downloads the build for your computer and checks it against the SHA-256 checksum GitHub publishes for the release. Then:
+
+- **macOS**: **Restart to update** swaps the new GitDonkey.app in for the old one and reopens it. GitDonkey downloads the update itself rather than through a browser, so the new version carries no quarantine flag and there is no **Open Anyway** step this time. If GitDonkey can't write to the folder it lives in (a standard, non-admin account with GitDonkey in Applications, say), it opens the disk image instead so you can drag it to Applications.
+- **Windows**: **Restart to update** runs the installer silently over your current install, and GitDonkey starts again when it's done.
+- **Anything else**, or a computer with no build in the release: **Download** opens the release page.
+
+The builds aren't code-signed, which rules out the usual Squirrel / electron-updater route on macOS; this is why GitDonkey installs its own updates.
+
 ## Signing in to remotes
 
 When a remote needs a login, GitDonkey asks for it in its own dialog: username and token for HTTPS, passphrase for SSH keys, and a fingerprint check for new SSH hosts. Git then saves the login in your system keychain (macOS Keychain, Windows Credential Manager), so you are only asked once. If the [GitHub CLI](https://cli.github.com/) is installed and logged in (`gh auth login`), GitHub remotes sign in automatically.
@@ -72,6 +84,7 @@ npm run brand      # regenerate the icon, logo and brand sheet
 - **Undo / redo** for commits, checkouts, branch create/delete/rename, resets, tags and interactive rebases.
 - **Author avatars** from GitHub and Gravatar (switch off in Settings).
 - **Tabs** for multiple repositories, recent repositories, clone, init, drag a folder in to open it, and auto-refresh when files change.
+- **Updates**: a notice when a new release is out, with its notes, and a one-click download and restart (switch off in Settings).
 
 ## Keyboard
 
@@ -94,9 +107,11 @@ On Windows, read Ctrl for ⌘, Alt for ⌥ and Shift for ⇧.
 ## Tests
 
 ```bash
-npm test          # unit tests against real temporary repositories (backend, graph, patches, conflicts, avatars, sign-in)
-npm run test:e2e  # Playwright run of the real app against a demo repo and a bare "origin"
+npm test          # unit tests against real temporary repositories (backend, graph, patches, conflicts, avatars, sign-in, updates)
+npm run test:e2e  # Playwright run of the real app against a demo repo and a bare "origin", then the update flow against a fake release feed
 ```
+
+The update run serves a release one major version ahead from 127.0.0.1. On macOS it goes on to download a real DMG, swap a stand-in app bundle and reopen it; that last check builds a tiny launcher with `cc` from the Xcode Command Line Tools and is skipped without them.
 
 The end-to-end run writes screenshots to `test/e2e/shots/`.
 

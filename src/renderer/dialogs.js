@@ -148,6 +148,7 @@ export async function settingsDialog(app) {
         { value: '15', label: 'Every 15 minutes' }, { value: '30', label: 'Every 30 minutes' },
       ] },
       { name: 'avatars', type: 'checkbox', label: 'Show author avatars', value: s.avatars !== false, hint: 'Pictures come from GitHub and Gravatar, looked up by a hash of each author’s email.' },
+      { name: 'checkUpdates', type: 'checkbox', label: 'Check for updates automatically', value: s.checkUpdates !== false, hint: `You have GitDonkey ${app.info.version}. It looks for a new release on GitHub at launch and every few hours.` },
       { name: 'confirmDiscard', type: 'checkbox', label: 'Ask before discarding changes', value: s.confirmDiscard !== false },
     ],
     extra: h('div', { class: 'settings-ai' },
@@ -159,6 +160,10 @@ export async function settingsDialog(app) {
   app.setSetting('pullMode', values.pullMode, { silent: true });
   app.setSetting('autoFetch', Number(values.autoFetch), { silent: true });
   app.setSetting('confirmDiscard', values.confirmDiscard, { silent: true });
+  if ((s.checkUpdates !== false) !== values.checkUpdates) {
+    app.setSetting('checkUpdates', values.checkUpdates, { silent: true });
+    if (values.checkUpdates) invoke('update:check').catch(() => {});
+  }
   if ((s.avatars !== false) !== values.avatars) app.setSetting('avatars', values.avatars);
   app.applyAutoFetch();
   if (app.repo && values.name.trim() && values.email.trim() && (values.name !== id.globalName || values.email !== id.globalEmail)) {

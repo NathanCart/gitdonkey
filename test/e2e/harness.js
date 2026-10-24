@@ -11,7 +11,7 @@ const { makeFixture } = require('./fixture');
 
 const ROOT = path.resolve(__dirname, '../..');
 
-async function launch({ fixture = true, args = [], show = Boolean(process.env.SHOW), outDir } = {}) {
+async function launch({ fixture = true, args = [], env: extraEnv = {}, show = Boolean(process.env.SHOW), outDir } = {}) {
   const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gitdonkey-e2e-')));
   const home = path.join(work, 'home');
   fs.mkdirSync(home);
@@ -25,6 +25,7 @@ async function launch({ fixture = true, args = [], show = Boolean(process.env.SH
     GITDONKEY_MULTI_INSTANCE: '1',
     GITDONKEY_QUIT_ON_CLOSE: '1',
     GITDONKEY_OFFLINE: '1',
+    ...extraEnv,
   };
   if (!show) env.GITDONKEY_HIDDEN = '1';
   const app = await _electron.launch({

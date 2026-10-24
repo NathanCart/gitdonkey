@@ -1018,6 +1018,24 @@ body.show-welcome .toasts, body.no-panel .toasts { right: 16px; }
 .toast-actions { display: flex; gap: 6px; margin: 10px 0 0 16px; }
 .toast-error { border-color: rgba(255, 90, 60, 0.45); }
 
+/* Update notice: a toast that waits for an answer. Cyan is "behind", as on the Pull key.
+   Toasts float above modals; this one steps aside while a dialog is open so it never covers its keys. */
+body:has(#layer .overlay) .toast-pinned { display: none; }
+.update-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-right: 10px; }
+.update-link { display: inline-flex; align-items: center; gap: 4px; color: var(--legend); font-size: 12px; text-decoration: underline; text-decoration-color: var(--rule-2); text-underline-offset: 3px; transition: text-decoration-color var(--throw); }
+.update-link:hover { text-decoration-color: var(--legend-2); }
+.update-notes { margin: 8px 10px 0 16px; padding: 8px 10px; max-height: 136px; overflow: auto; background: var(--case); border: 1px solid var(--rule); border-radius: var(--radius-sm); color: var(--legend-2); font-size: 12px; line-height: 1.45; user-select: text; }
+.update-notes > * + * { margin-top: 4px; }
+.update-notes > .un-h + *, .update-notes > * + .un-h { margin-top: 8px; }
+.un-h { color: var(--legend); font-weight: 600; }
+.un-li { position: relative; padding-left: 12px; }
+.un-li::before { content: ''; position: absolute; left: 2px; top: 0.6em; width: 4px; height: 4px; border-radius: 50%; background: var(--legend-3); }
+.update-progress { display: flex; align-items: center; gap: 10px; margin: 10px 10px 0 16px; }
+.update-bytes { flex: none; color: var(--legend-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.update-error { margin: 8px 10px 0 16px; color: var(--red); font-size: 12px; line-height: 1.45; }
+.st-update { display: inline-flex; align-items: center; gap: 6px; height: 18px; padding: 0 6px; margin: 0 -6px; border-radius: var(--radius-sm); color: var(--legend); transition: background-color var(--throw); }
+.st-update:hover { background: var(--panel-3); }
+
 /* Interactive rebase */
 .irb-list { display: flex; flex-direction: column; gap: 1px; background: var(--seam); border: 1px solid var(--seam); border-radius: var(--radius); overflow: hidden; max-height: 52vh; overflow-y: auto; }
 .irb-row { display: grid; grid-template-columns: 30px 110px 76px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 10px 6px 4px; background: var(--panel-2); }

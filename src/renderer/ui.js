@@ -7,11 +7,21 @@ const layer = () => document.getElementById('layer');
 
 let toastStack = null;
 
-export function toast({ type = 'info', title, message, detail, actions = [], timeout } = {}) {
+function toasts() {
   if (!toastStack) {
     toastStack = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
     document.body.appendChild(toastStack);
   }
+  return toastStack;
+}
+
+/** Seat a card someone else manages (it carries .toast-pinned) in the toast stack. */
+export function mountToast(el) {
+  toasts().appendChild(el);
+}
+
+export function toast({ type = 'info', title, message, detail, actions = [], timeout } = {}) {
+  toasts();
   const ledState = { success: 'green', error: 'red', warn: 'amber', info: 'cyan' }[type] || 'cyan';
   let timer = null;
   const close = () => {
@@ -36,7 +46,8 @@ export function toast({ type = 'info', title, message, detail, actions = [], tim
         }, a.label)))
       : null);
   toastStack.appendChild(el);
-  while (toastStack.children.length > 5) toastStack.firstChild.remove();
+  const passing = [...toastStack.children].filter((c) => !c.classList.contains('toast-pinned'));
+  while (passing.length > 5) passing.shift().remove();
   const ms = timeout ?? (type === 'error' ? 12000 : type === 'warn' ? 8000 : 4500);
   if (ms > 0) {
     timer = setTimeout(close, ms);

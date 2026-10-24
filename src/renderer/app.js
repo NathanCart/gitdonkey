@@ -13,10 +13,11 @@ import { renderToolbar } from './toolbar.js';
 import { renderWelcome } from './welcome.js';
 import * as dialogs from './dialogs.js';
 import { setAvatarsEnabled, onAvatarChange } from './avatars.js';
+import { Updates } from './updates.js';
 
 const PAGE = 1500;
 const DEFAULT_SETTINGS = {
-  pullMode: 'merge', autoFetch: 0, diffMode: 'unified', diffContext: 'hunks', ignoreWhitespace: false, fileView: 'path', confirmDiscard: true, avatars: true,
+  pullMode: 'merge', autoFetch: 0, diffMode: 'unified', diffContext: 'hunks', ignoreWhitespace: false, fileView: 'path', confirmDiscard: true, avatars: true, checkUpdates: true,
 };
 const DEFAULT_LAYOUT = { sidebar: 248, panel: 392, refs: 176, graphMax: 340, sidebarHidden: false, panelHidden: false };
 
@@ -89,6 +90,7 @@ class App {
     this.refsByHash = new Map();
     this.lastError = null;
     this.patch = new PatchBay(this);
+    this.updates = new Updates(this);
   }
 
   get tab() {
@@ -166,6 +168,7 @@ class App {
     this.syncWatch();
     await this.activate((target || this.tabs[0]).id);
     this.applyAutoFetch();
+    await this.updates.init();
     document.body.classList.add('ready');
   }
 
@@ -722,7 +725,7 @@ class App {
     if (busy && this.progress && this.progress.percent !== null && this.progress.percent !== undefined) {
       mid.appendChild(h('span', { class: 'mp-track' }, h('span', { class: 'mp-fill', style: { width: `${this.progress.percent}%` } })));
     }
-    const right = h('div', { class: 'st-right' });
+    const right = h('div', { class: 'st-right' }, this.updates.statusKey());
     if (d && this.tab && this.tab.root) {
       const b = d.refs.local.find((x) => x.isHead);
       if (b && b.upstream) right.appendChild(h('span', { class: 'st-up', title: b.ahead || b.behind ? 'Out of sync with upstream' : 'In sync with upstream' }, led(b.ahead || b.behind ? 'amber' : 'green'), `${b.name} → ${b.upstream}`, b.ahead ? h('span', { class: 'ab ahead' }, `↑${b.ahead}`) : null, b.behind ? h('span', { class: 'ab behind' }, `↓${b.behind}`) : null));
@@ -1869,6 +1872,7 @@ class App {
       case 'ai-settings': return dialogs.aiSettingsDialog(this);
       case 'shortcuts': return dialogs.shortcutsDialog();
       case 'refresh': return this.refresh();
+      case 'check-updates': return this.updates.check();
       case 'toggle-sidebar':
         this.layout.sidebarHidden = !this.layout.sidebarHidden;
         this.applyLayout();
