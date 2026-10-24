@@ -540,6 +540,58 @@ async function main() {
     await win().keyboard.press('Escape');
   });
 
+  await step('AI commit message from an OpenAI-compatible endpoint', async () => {
+    const http = require('http');
+    const seen = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => {
+        body += d;
+      });
+      req.on('end', () => {
+        seen.push({ url: req.url, auth: req.headers.authorization || null, body });
+        res.setHeader('content-type', 'application/json');
+        if (req.url.endsWith('/models')) res.end(JSON.stringify({ data: [{ id: 'donkey-1' }, { id: 'text-embedding-x' }] }));
+        else res.end(JSON.stringify({ choices: [{ message: { content: '```\nAdd a hay manifest\n\nLists the bales the stable needs.\n```' } }] }));
+      });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      fs.writeFileSync(path.join(repo, 'hay.txt'), 'bale one\nbale two\n');
+      git('add', 'hay.txt');
+      await win().evaluate(() => window.__gitdonkey.selectWip());
+      await win().keyboard.press(`${MOD}+r`);
+      await fileRow('staged', 'hay.txt').waitFor();
+      await win().locator('.commit-summary').fill('');
+      // Not set up yet: the key opens the AI settings dialog.
+      await win().locator('.ai-btn').click();
+      await modal().locator('select').first().selectOption('custom');
+      const input = (label) => modal().locator('.field', { hasText: label }).locator('input');
+      await input('Base URL').fill(`http://127.0.0.1:${server.address().port}/v1`);
+      await modal().locator('.btn', { hasText: 'Check key and load models' }).click();
+      await modal().locator('.ai-status', { hasText: 'Connected. 1 model to choose from' }).waitFor();
+      await input('Model').fill('donkey-1');
+      await t.shot('17b-ai-settings');
+      await modal().locator('.btn-key', { hasText: 'Save' }).click();
+      // Saving with a staged change goes straight on to write the message.
+      await waitFor(async () => (await win().locator('.commit-summary').inputValue()) === 'Add a hay manifest', { message: 'generated summary' });
+      if ((await win().locator('.commit-desc').inputValue()) !== 'Lists the bales the stable needs.') throw new Error('description not filled');
+      await waitFor(async () => !(await win().locator('.commit-btn').isDisabled()), { message: 'commit button enabled after generating', timeout: 3000 });
+      const call = seen.find((s) => s.url.endsWith('/chat/completions'));
+      const sent = JSON.parse(call.body);
+      if (sent.model !== 'donkey-1' || !/hay\.txt/.test(sent.messages[1].content) || !/\+bale two/.test(sent.messages[1].content)) throw new Error(`unexpected request: ${call.body.slice(0, 300)}`);
+      if (call.auth) throw new Error('sent an Authorization header with no key saved');
+      await t.shot('17c-ai-generated');
+      await closeToasts();
+      await win().locator('.commit-summary').fill('');
+      await win().locator('.commit-desc').fill('');
+      git('reset', '-q', 'hay.txt');
+      fs.unlinkSync(path.join(repo, 'hay.txt'));
+    } finally {
+      server.close();
+    }
+  });
+
   await step('new tab shows the welcome screen; clone a repository', async () => {
     await win().locator('#tab-add').click();
     await win().locator('.w-action[data-action="clone"]').waitFor();

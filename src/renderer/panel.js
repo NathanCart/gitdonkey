@@ -29,8 +29,10 @@ export class Panel {
     this.amendLabel = h('label', { class: 'check' }, this.amendBox, h('span', { class: 'check-box' }, icon('check', { size: 12, stroke: 3 })), h('span', null, 'Amend previous commit'));
     this.commitBtn = h('button', { class: 'btn btn-key btn-block commit-btn', type: 'button', onClick: () => this.submit() });
     this.commitHint = h('div', { class: 'commit-hint' });
+    this.aiLabel = h('span', null, 'Generate');
+    this.aiBtn = h('button', { class: 'btn btn-tiny ai-btn', type: 'button', onClick: () => this.app.generateMessage() }, icon('sparkles', { size: 13 }), this.aiLabel);
     this.box = h('div', { class: 'commit-box' },
-      h('div', { class: 'commit-legend' }, legend('Commit message'), this.counter),
+      h('div', { class: 'commit-legend' }, legend('Commit message'), h('span', { class: 'commit-tools' }, this.aiBtn, this.counter)),
       this.summary,
       this.desc,
       h('div', { class: 'commit-row' }, this.amendLabel, h('span', { class: 'commit-kbd' }, kbd(`${kb('⌘↵')}`))),
@@ -89,8 +91,19 @@ export class Panel {
     return d.trim() ? `${s}\n\n${d}` : s;
   }
 
+  /** While AI writes the message: lock the fields and say so on the key. */
+  setGenerating(on) {
+    this.generating = on;
+    this.aiLabel.textContent = on ? 'Writing…' : 'Generate';
+    this.aiBtn.setAttribute('aria-busy', String(on));
+    this.summary.readOnly = on;
+    this.desc.readOnly = on;
+    this.box.classList.toggle('generating', on);
+    this.updateCommitButton();
+  }
+
   submit() {
-    if (this.commitBtn.disabled) return;
+    if (this.commitBtn.disabled || this.generating) return;
     this.app.commitFromPanel(this.message(), this.amendBox.checked);
   }
 
@@ -367,6 +380,19 @@ export class Panel {
     this.counter.classList.toggle('over', left < 0);
     this.counter.classList.toggle('near', left >= 0 && left < 10);
     this.amendBox.disabled = !this.app.headHash || Boolean(op);
+    this.updateAiButton(st, amend);
+  }
+
+  updateAiButton(st, amend) {
+    const ai = this.app.aiConfig();
+    const nothing = !st.staged.length && !(amend && this.app.headHash);
+    this.aiBtn.disabled = Boolean(this.generating) || st.conflicted.length > 0 || (ai && nothing);
+    this.aiBtn.title = !ai
+      ? 'Set up AI commit messages'
+      : nothing
+        ? 'Stage changes, then generate a message from them'
+        : `Write the message from the staged changes (${ai.label})`;
+    if (this.generating) this.commitBtn.disabled = true;
   }
 
   // ------------------------------------------------------------ commit / stash details

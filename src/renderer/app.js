@@ -120,6 +120,7 @@ class App {
     Object.assign(this.layout, (await invoke('store:get', 'layout')) || {});
     setAvatarsEnabled(this.settings.avatars !== false);
     onAvatarChange(() => this.graph && this.graph.draw());
+    this.aiProviders = await invoke('ai:providers').catch(() => []);
     const $ = (s) => document.querySelector(s);
     this.els = {
       tabs: $('#tabs'), toolbar: $('#toolbar'), welcome: $('#welcome'), repoView: $('#repo'), sidebar: $('#sidebar'),
@@ -927,6 +928,45 @@ class App {
       this.panel.saveDraft();
     }
     this.panel.updateCommitButton();
+  }
+
+  /** The chosen AI provider and model, or null when AI commit messages are off. */
+  aiConfig() {
+    const ai = this.settings.ai;
+    const p = ai && ai.provider && (this.aiProviders || []).find((x) => x.id === ai.provider);
+    if (!p) return null;
+    const model = ((ai.models || {})[p.id] || p.model || '').trim();
+    return { provider: p.id, model, baseUrl: (ai.baseUrls || {})[p.id] || '', instructions: ai.instructions || '', label: model ? `${p.name} · ${model}` : p.name };
+  }
+
+  /** Write the commit message from the staged changes with the user's own AI provider. */
+  async generateMessage() {
+    const ai = this.aiConfig();
+    if (!ai) return dialogs.aiSettingsDialog(this, { thenGenerate: true });
+    const panel = this.panel;
+    const tab = this.tab;
+    if (!tab || panel.generating) return;
+    const before = panel.message();
+    const amend = panel.amendBox.checked;
+    panel.setGenerating(true);
+    try {
+      const r = await invoke('ai:generate', { repo: tab.root, provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, instructions: ai.instructions, amend });
+      const message = r.description ? `${r.summary}\n\n${r.description}` : r.summary;
+      // The user may have switched tabs while it was writing.
+      if (this.tab === tab) panel.setMessage(message);
+      else tab.ui.draft = { ...(tab.ui.draft || {}), summary: r.summary, description: r.description };
+      toast({
+        type: 'success',
+        title: 'Message written',
+        message: `By ${r.model || ai.label}. Read it before you commit.`,
+        actions: before.trim() && this.tab === tab ? [{ label: 'Undo', run: () => panel.setMessage(before) }] : [],
+        timeout: 6000,
+      });
+    } catch (e) {
+      toast({ type: 'error', title: 'Couldn’t write a message', message: e.message, actions: [{ label: 'AI settings…', run: () => dialogs.aiSettingsDialog(this) }] });
+    } finally {
+      panel.setGenerating(false);
+    }
   }
 
   async commitFromPanel(message, amend) {
@@ -1826,6 +1866,7 @@ class App {
       case 'add-remote': return this.addRemote();
       case 'identity': return dialogs.identityDialog(this);
       case 'settings': return dialogs.settingsDialog(this);
+      case 'ai-settings': return dialogs.aiSettingsDialog(this);
       case 'shortcuts': return dialogs.shortcutsDialog();
       case 'refresh': return this.refresh();
       case 'toggle-sidebar':

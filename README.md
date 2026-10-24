@@ -28,6 +28,18 @@ The builds are not code-signed yet, so the first launch needs one extra click:
 
 When a remote needs a login, GitDonkey asks for it in its own dialog: username and token for HTTPS, passphrase for SSH keys, and a fingerprint check for new SSH hosts. Git then saves the login in your system keychain (macOS Keychain, Windows Credential Manager), so you are only asked once. If the [GitHub CLI](https://cli.github.com/) is installed and logged in (`gh auth login`), GitHub remotes sign in automatically.
 
+## AI commit messages
+
+Optional, and off until you set it up. Press **Generate** in the commit box (or open **AI Commit Messages…** from the GitDonkey menu, or Settings) and pick a provider:
+
+- **OpenAI**, **Anthropic**, **OpenRouter** or **Google Gemini**, with your own API key
+- **Ollama**, running on your own computer, with no key
+- **Any OpenAI-compatible endpoint** (LM Studio, vLLM, a company gateway): give its base URL, and a key if it needs one
+
+**Check key and load models** tests the key and lists the provider's models; leave Model empty to use the default. You can add your own instructions, like “use Conventional Commits”, and it follows the style of your recent commits anyway.
+
+What is sent, and when: only when you press Generate, GitDonkey sends the staged diff (lockfiles and binaries left out, long files trimmed), the file names, the branch name and your last few commit subjects to the provider you chose. Nothing else, and nothing at any other time. API keys are encrypted with your system keychain (Electron `safeStorage`), stay in the main process, and are only ever sent to their own provider. The message lands in the summary and description for you to read and edit before committing.
+
 ## Run from source
 
 ```bash
@@ -49,6 +61,7 @@ npm run brand      # regenerate the icon, logo and brand sheet
 - **Commit graph** of every branch, remote branch and tag, with a WIP row, colour-coded lanes, branch/tag plugs, infinite loading and find (message, author, SHA).
 - **Staging** by file, hunk or single line, plus discard (file, hunk, lines) and discard-all. Path and tree views, multi-select.
 - **Commit** with summary/description, amend, or message-only amend (⌘↵ to commit).
+- **AI commit messages** (optional): write the message from the staged changes with OpenAI, Anthropic, OpenRouter, Gemini, Ollama or any OpenAI-compatible endpoint, using your own key.
 - **Diffs** in unified or split view, hunks-only or full file, ignore-whitespace, syntax highlighting, and side-by-side image diffs. Also file view, file history (follows renames) and blame.
 - **Branches**: create, check out (local, remote-tracking, detached), rename, delete, set upstream, fast-forward, merge, rebase, cherry-pick, revert, and reset soft/mixed/hard.
 - **Drag to patch**: drag one branch onto another to merge, rebase, fast-forward or push.
@@ -90,7 +103,7 @@ The end-to-end run writes screenshots to `test/e2e/shots/`.
 ## Layout
 
 ```
-src/main/       Electron main process: git.js (all Git operations), IPC, menus, file watcher, settings
+src/main/       Electron main process: git.js (all Git operations), ai.js (AI commit messages, key vault), IPC, menus, file watcher, settings
 src/preload/    the allow-listed bridge between main and renderer
 src/renderer/   the UI (ES modules, no build step)
   lib/          pure logic: graph lanes, diff parsing / partial patches, conflict parsing, logo mark

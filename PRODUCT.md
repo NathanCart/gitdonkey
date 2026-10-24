@@ -34,6 +34,7 @@ Familiar GitKraken layout and interaction model (tabs, toolbar, left refs sideba
 
 - Commit graph (all branches, remotes and tags) with WIP row, ref pills, search, infinite loading.
 - Staging at file, hunk and line level; discard; commit and amend; message-only amend.
+- AI commit messages (opt-in): the user picks a provider (OpenAI, Anthropic, OpenRouter, Google Gemini, Ollama, or any OpenAI-compatible endpoint) and brings their own key, kept encrypted by the OS keychain. The staged diff is sent only when they press Generate.
 - Branches: create, checkout (local, remote-tracking, detached), rename, delete, set upstream, fast-forward, merge, rebase, interactive rebase (reword, squash, fixup, drop), cherry-pick, revert, reset soft/mixed/hard.
 - Drag a branch onto another to merge, rebase, fast-forward or push.
 - Remotes: fetch, pull (merge / ff-only / rebase), push with upstream setup and force-with-lease, add/remove/rename remotes, delete remote branches and tags.

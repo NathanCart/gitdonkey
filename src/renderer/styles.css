@@ -712,6 +712,20 @@ body.is-patching, body.is-patching * { cursor: grabbing !important; }
 .commit-row { display: flex; align-items: center; justify-content: space-between; }
 .commit-btn { height: 36px; font-size: 13px; }
 .commit-hint { font-size: 11.5px; color: var(--legend-3); text-align: center; }
+.commit-tools { display: flex; align-items: center; gap: 10px; }
+/* AI key: a quiet printed key beside the legend; the commit button stays the module's keycap. */
+.ai-btn { gap: 5px; color: var(--legend-2); }
+.ai-btn:hover:not(:disabled) { color: var(--legend); }
+/* Amber only while it's writing: amber is progress, not decoration. */
+.ai-btn[aria-busy='true'] { color: var(--legend); }
+.ai-btn[aria-busy='true'] .ico { color: var(--amber); animation: ai-pulse 900ms steps(2, jump-none) infinite; }
+@keyframes ai-pulse { 50% { opacity: 0.25; } }
+.commit-box.generating .commit-summary, .commit-box.generating .commit-desc { color: var(--legend-3); }
+.ai-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.ai-status { flex-basis: 100%; min-height: 16px; font-size: 11.5px; color: var(--legend-2); }
+.ai-status.bad { color: var(--red); }
+.settings-ai { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.settings-ai .field-hint { margin-top: 2px; }
 
 /* ------------------------------------------------------------------ panel: commit details */
 

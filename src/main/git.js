@@ -751,6 +751,34 @@ class GitRepo {
     return parseLog(await this.text(args));
   }
 
+  /**
+   * What an AI commit message is written from: the staged diff, its files,
+   * the branch and recent subjects. When amending, the diff covers the whole
+   * commit as it will be (index against HEAD's parent).
+   */
+  async commitContext({ amend = false } = {}) {
+    const hasHead = await this.hasHead();
+    let base = null;
+    if (!hasHead) base = await this.emptyTree();
+    else if (amend) {
+      const parents = (await this.text(['rev-list', '--parents', '-n', '1', 'HEAD'])).trim().split(/\s+/).slice(1);
+      base = parents[0] || (await this.emptyTree());
+    }
+    const range = base ? ['--cached', base] : ['--cached'];
+    const [diff, ns, branch, recent] = await Promise.all([
+      this.run(['diff', '--no-color', '--no-ext-diff', '-M', '-U3', ...range, '--'], { maxBuffer: MAX_DIFF_BYTES })
+        .then((r) => r.stdout)
+        .catch((e) => {
+          if (e.kind === 'TOO_LARGE') return '';
+          throw e;
+        }),
+      this.text(['diff', '--name-status', '-z', '-M', ...range, '--']),
+      this.run(['symbolic-ref', '-q', '--short', 'HEAD'], { okCodes: [0, 1, 128] }).then((r) => r.stdout.trim() || null),
+      hasHead ? this.text(['log', '-12', '--format=%s', ...(amend ? ['--skip=1'] : []), 'HEAD', '--']).then((s) => s.split('\n').filter(Boolean)) : [],
+    ]);
+    return { diff, files: parseNameStatus(ns), branch, recent };
+  }
+
   async lastCommitMessage() {
     if (!(await this.hasHead())) return '';
     return (await this.text(['log', '-1', '--format=%B', 'HEAD'])).replace(/\s+$/, '');

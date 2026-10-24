@@ -3,7 +3,7 @@
 import { h, icon, clear, legend, kbd, logoMark } from './dom.js';
 import { openModal, formDialog, confirmDialog, field, toast } from './ui.js';
 import { git, invoke, on, kb, sep, isAbsolutePath } from './api.js';
-import { guessRepoName, shortHash, relativeTime } from './lib/util.js';
+import { guessRepoName, shortHash, relativeTime, pluralize } from './lib/util.js';
 
 const pickFolder = (current) => invoke('dialog:pickFolder', { defaultPath: current || undefined, title: 'Choose a folder' });
 
@@ -150,6 +150,9 @@ export async function settingsDialog(app) {
       { name: 'avatars', type: 'checkbox', label: 'Show author avatars', value: s.avatars !== false, hint: 'Pictures come from GitHub and Gravatar, looked up by a hash of each author’s email.' },
       { name: 'confirmDiscard', type: 'checkbox', label: 'Ask before discarding changes', value: s.confirmDiscard !== false },
     ],
+    extra: h('div', { class: 'settings-ai' },
+      h('div', null, h('div', { class: 'field-label' }, 'AI commit messages'), h('div', { class: 'field-hint' }, app.aiConfig() ? app.aiConfig().label : 'Off')),
+      h('button', { type: 'button', class: 'btn btn-small', onClick: () => aiSettingsDialog(app) }, app.aiConfig() ? 'Change…' : 'Set up…')),
     validate: (v) => (app.repo && v.email && !/^[^\s@]+@[^\s@]+$/.test(v.email.trim()) ? 'Enter a valid email address.' : null),
   });
   if (!values) return;
@@ -162,6 +165,133 @@ export async function settingsDialog(app) {
     await git(app.repo, 'setIdentity', { name: values.name, email: values.email, global: true }).catch((e) => toast({ type: 'error', title: 'Could not save identity', message: e.message }));
   }
   toast({ type: 'success', title: 'Settings saved' });
+}
+
+// ---------------------------------------------------------------- AI commit messages
+
+/** Choose a provider, paste your own key, pick a model. */
+export async function aiSettingsDialog(app, { thenGenerate = false } = {}) {
+  const providers = await invoke('ai:providers').catch(() => []);
+  app.aiProviders = providers;
+  const byId = Object.fromEntries(providers.map((p) => [p.id, p]));
+  const cur = app.settings.ai || {};
+  const models = { ...(cur.models || {}) };
+  const baseUrls = { ...(cur.baseUrls || {}) };
+  const forget = new Set();
+  let shown = null;
+  let inputs = null;
+
+  const suggestions = h('datalist', { id: 'ai-model-list' });
+  const status = h('span', { class: 'ai-status', role: 'status' });
+  const say = (text, bad = false) => {
+    status.textContent = text;
+    status.classList.toggle('bad', bad);
+  };
+  const loadBtn = h('button', { type: 'button', class: 'btn btn-small' }, 'Check key and load models');
+  const forgetBtn = h('button', { type: 'button', class: 'btn btn-small btn-danger' }, 'Forget saved key');
+  const rowOf = (name) => inputs[name].closest('.field');
+
+  const sync = (v, ins) => {
+    inputs = ins;
+    const p = byId[v.provider];
+    // Remember what was typed for the provider we're leaving.
+    if (shown && shown !== v.provider && byId[shown]) {
+      models[shown] = ins.model.value.trim();
+      if (byId[shown].customBase) baseUrls[shown] = ins.baseUrl.value.trim();
+    }
+    if (shown !== v.provider) {
+      shown = v.provider;
+      ins.model.value = p ? models[p.id] || '' : '';
+      ins.baseUrl.value = p && p.customBase ? baseUrls[p.id] || '' : '';
+      ins.key.value = '';
+      suggestions.textContent = '';
+      say('');
+    }
+    ins.model.setAttribute('list', 'ai-model-list');
+    const saved = p && p.hasKey && !forget.has(p.id);
+    rowOf('key').hidden = !p || (!p.needsKey && !p.optionalKey);
+    rowOf('baseUrl').hidden = !p || !p.customBase;
+    rowOf('model').hidden = !p;
+    rowOf('instructions').hidden = !p;
+    loadBtn.parentElement.hidden = !p;
+    forgetBtn.hidden = !saved;
+    if (!p) return;
+    ins.key.placeholder = saved ? 'Saved. Paste a new key to replace it.' : p.optionalKey ? 'Only if the endpoint needs one' : `Paste your ${p.name} API key`;
+    const keyHint = rowOf('key').querySelector('.field-hint');
+    keyHint.textContent = p.keyUrl ? `Encrypted with your system keychain and only sent to ${p.name}. Get a key at ${p.keyUrl.replace(/^https:\/\//, '')}` : 'Encrypted with your system keychain.';
+    ins.model.placeholder = p.model ? `${p.model} (default)` : 'Model id';
+    ins.baseUrl.placeholder = p.id === 'ollama' ? p.base : 'http://localhost:1234/v1';
+  };
+
+  loadBtn.addEventListener('click', async () => {
+    const p = byId[shown];
+    if (!p) return;
+    say('Asking…');
+    loadBtn.disabled = true;
+    try {
+      const ids = await invoke('ai:models', { provider: p.id, key: inputs.key.value, baseUrl: inputs.baseUrl.value });
+      clear(suggestions).append(...ids.map((id) => h('option', { value: id })));
+      const ok = p.needsKey || inputs.key.value.trim() ? 'Key works.' : 'Connected.';
+      say(ids.length ? `${ok} ${pluralize(ids.length, 'model')} to choose from: start typing in Model.` : `${ok} It listed no models, so type a model id.`);
+    } catch (e) {
+      say(e.message, true);
+    } finally {
+      loadBtn.disabled = false;
+    }
+  });
+  forgetBtn.addEventListener('click', () => {
+    forget.add(shown);
+    forgetBtn.hidden = true;
+    sync({ provider: shown }, inputs);
+    say('The saved key will be removed when you save.');
+  });
+
+  const values = await formDialog({
+    title: 'AI commit messages',
+    okLabel: 'Save',
+    width: 560,
+    intro: h('p', { class: 'modal-text' }, 'Generate writes the commit message from your staged changes. When you press it, GitDonkey sends the staged diff (trimmed), file names, branch name and recent commit subjects to the provider you choose, with your own key. Nothing is sent until you press it.'),
+    fields: [
+      { name: 'provider', label: 'Provider', type: 'select', value: cur.provider && byId[cur.provider] ? cur.provider : '', options: [{ value: '', label: 'Off' }, ...providers.map((p) => ({ value: p.id, label: p.name }))] },
+      { name: 'key', label: 'API key', type: 'password', hint: ' ' },
+      { name: 'baseUrl', label: 'Base URL', mono: true },
+      { name: 'model', label: 'Model', mono: true, hint: 'Leave empty for the default. Any model id the provider accepts works.' },
+      { name: 'instructions', label: 'Extra instructions (optional)', type: 'textarea', rows: 3, value: cur.instructions || '', placeholder: 'For example: Use Conventional Commits. Keep the body under three lines.' },
+    ],
+    extra: h('div', { class: 'ai-tools' }, loadBtn, forgetBtn, status, suggestions),
+    onChange: sync,
+    validate: (v) => {
+      const p = byId[v.provider];
+      if (!p) return null;
+      if (p.needsKey && !v.key.trim() && (!p.hasKey || forget.has(p.id))) return `Paste your ${p.name} API key.`;
+      if (p.customBase && p.id === 'custom' && !/^https?:\/\/\S+/.test(v.baseUrl.trim())) return 'Enter the endpoint’s base URL, like http://localhost:1234/v1.';
+      if (p.customBase && v.baseUrl.trim() && !/^https?:\/\/\S+/.test(v.baseUrl.trim())) return 'The base URL should start with http:// or https://.';
+      if (!p.model && !v.model.trim()) return 'Enter the model id to use.';
+      return null;
+    },
+  });
+  if (!values) return;
+  const p = byId[values.provider];
+  if (p) {
+    models[p.id] = values.model.trim();
+    if (p.customBase) baseUrls[p.id] = values.baseUrl.trim();
+  }
+  try {
+    for (const id of forget) await invoke('ai:setKey', id, null);
+    if (p && values.key.trim()) await invoke('ai:setKey', p.id, values.key.trim());
+  } catch (e) {
+    toast({ type: 'error', title: 'Couldn’t save the key', message: e.message });
+    return;
+  }
+  app.aiProviders = await invoke('ai:providers').catch(() => providers);
+  app.setSetting('ai', { provider: values.provider, models, baseUrls, instructions: values.instructions.trim() }, { silent: true });
+  app.panel.updateCommitButton();
+  if (!p) {
+    toast({ type: 'success', title: 'AI commit messages are off' });
+    return;
+  }
+  toast({ type: 'success', title: 'AI commit messages on', message: `${app.aiConfig().label}. Press Generate in the commit box.` });
+  if (thenGenerate && app.repo) app.generateMessage();
 }
 
 // ---------------------------------------------------------------- remotes

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen, nativeImage, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen, nativeImage, net, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -13,6 +13,7 @@ const { AskpassServer } = require('./askpass');
 const { Store } = require('./store');
 const { RepoWatcher } = require('./watcher');
 const { AvatarService } = require('./avatars');
+const { PROVIDERS, PROVIDER, AiError, buildPrompt, parseMessage, complete, listModels, KeyVault } = require('./ai');
 
 // Methods of GitRepo the renderer may call.
 const GIT_METHODS = new Set([
@@ -38,6 +39,8 @@ let watcher = null;
 let avatars = null;
 let askpass = null;
 let githubCli = null;
+let vault = null;
+const aiFetch = (url, init) => net.fetch(url, init);
 const askpassWaiters = new Map();
 
 /** Show the renderer's sign-in dialog for a Git / SSH prompt. */
@@ -157,6 +160,7 @@ function buildMenu() {
             { role: 'about' },
             { type: 'separator' },
             { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: menuCommand('settings') },
+            { label: 'AI Commit Messages…', click: menuCommand('ai-settings') },
             { type: 'separator' },
             { role: 'services' },
             { type: 'separator' },
@@ -182,7 +186,7 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Open in Terminal', accelerator: 'CmdOrCtrl+Alt+T', click: menuCommand('terminal') },
         { label: isMac ? 'Show in Finder' : 'Show in Explorer', accelerator: 'CmdOrCtrl+Shift+R', click: menuCommand('reveal') },
-        ...(isMac ? [] : [{ type: 'separator' }, { label: 'Settings…', accelerator: 'Ctrl+,', click: menuCommand('settings') }, { role: 'quit' }]),
+        ...(isMac ? [] : [{ type: 'separator' }, { label: 'Settings…', accelerator: 'Ctrl+,', click: menuCommand('settings') }, { label: 'AI Commit Messages…', click: menuCommand('ai-settings') }, { role: 'quit' }]),
       ],
     },
     {
@@ -377,6 +381,37 @@ function registerIpc() {
   ipcMain.handle('credentials:status', async () => ({ helpers: await credentialHelpers(), github: githubCli }));
   ipcMain.handle('credentials:remember', () => enableCredentialHelper());
   ipcMain.handle('avatar:clear', () => avatars.clear().then(() => true));
+
+  // AI commit messages. Keys go in and never come back out to the renderer.
+  ipcMain.handle('ai:providers', () => PROVIDERS.map((p) => ({ ...p, hasKey: vault.has(p.id) })));
+  ipcMain.handle('ai:setKey', (_e, id, key) => {
+    try {
+      return ok(vault.set(id, key));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('ai:models', async (_e, { provider, key, baseUrl } = {}) => {
+    try {
+      // A key typed into the dialog but not saved yet is used for this request only.
+      const k = typeof key === 'string' && key.trim() ? key.trim() : vault.get(provider);
+      return ok(await listModels({ provider, key: k, baseUrl }, aiFetch));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('ai:generate', async (_e, { repo, provider, model, baseUrl, instructions, amend } = {}) => {
+    try {
+      const r = repos.get(repo);
+      if (!r) throw new Error('Repository is not open');
+      const ctx = await r.commitContext({ amend: Boolean(amend) });
+      if (!ctx.files.length) throw new AiError('Stage some changes first, so there’s something to describe.', 'AI_NOTHING');
+      const text = await complete({ provider, key: vault.get(provider), model, baseUrl }, buildPrompt({ ...ctx, instructions, amend: Boolean(amend) }), aiFetch);
+      return ok({ ...parseMessage(text), model: (model || (PROVIDER[provider] && PROVIDER[provider].model) || '').trim() });
+    } catch (e) {
+      return fail(e);
+    }
+  });
   ipcMain.handle('window:setTitle', (_e, title) => {
     if (mainWindow) mainWindow.setTitle(String(title || 'GitDonkey'));
     return true;
@@ -402,6 +437,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     store = new Store(app.getPath('userData'));
+    vault = new KeyVault(store, safeStorage);
     try {
       askpass = new AskpassServer(path.join(app.getPath('userData'), 'askpass'), askRenderer);
       configureGit({ env: await askpass.start() });
