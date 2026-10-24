@@ -472,7 +472,7 @@ function registerIpc() {
   ipcMain.handle('ai:models', async (_e, { provider, key, baseUrl } = {}) => {
     try {
       // A key typed into the dialog but not saved yet is used for this request only.
-      const k = typeof key === 'string' && key.trim() ? key.trim() : vault.get(provider);
+      const k = typeof key === 'string' && key.trim() ? key.trim() : vault.require(provider);
       return ok(await listModels({ provider, key: k, baseUrl }, aiFetch));
     } catch (e) {
       return fail(e);
@@ -484,7 +484,7 @@ function registerIpc() {
       if (!r) throw new Error('Repository is not open');
       const ctx = await r.commitContext({ amend: Boolean(amend) });
       if (!ctx.files.length) throw new AiError('Stage some changes first, so there’s something to describe.', 'AI_NOTHING');
-      const text = await complete({ provider, key: vault.get(provider), model, baseUrl }, buildPrompt({ ...ctx, instructions, amend: Boolean(amend) }), aiFetch);
+      const text = await complete({ provider, key: vault.require(provider), model, baseUrl }, buildPrompt({ ...ctx, instructions, amend: Boolean(amend) }), aiFetch);
       return ok({ ...parseMessage(text), model: (model || (PROVIDER[provider] && PROVIDER[provider].model) || '').trim() });
     } catch (e) {
       return fail(e);
@@ -493,7 +493,7 @@ function registerIpc() {
   ipcMain.handle('ai:theme', async (_e, { provider, model, baseUrl, description } = {}) => {
     try {
       if (typeof description !== 'string' || !description.trim()) throw new AiError('Describe the theme you want first.', 'AI_CONFIG');
-      return ok(await complete({ provider, key: vault.get(provider), model, baseUrl }, buildThemePrompt(description), aiFetch));
+      return ok(await complete({ provider, key: vault.require(provider), model, baseUrl }, buildThemePrompt(description), aiFetch));
     } catch (e) {
       return fail(e);
     }
@@ -509,6 +509,12 @@ function registerIpc() {
   });
   ipcMain.on('theme:cached', (e) => {
     e.returnValue = cachedTheme();
+  });
+
+  ipcMain.handle('app:relaunch', () => {
+    app.relaunch();
+    app.quit();
+    return true;
   });
 
   ipcMain.handle('window:setTitle', (_e, title) => {
@@ -536,7 +542,9 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     store = new Store(app.getPath('userData'));
-    vault = new KeyVault(store, safeStorage);
+    // GITDONKEY_NO_KEYCHAIN (tests): behave as if the Keychain prompt was declined.
+    const noKeychain = { isEncryptionAvailable: () => false, encryptString: () => { throw new Error('Encryption is not available.'); }, decryptString: () => { throw new Error('Decryption is not available.'); } };
+    vault = new KeyVault(store, process.env.GITDONKEY_NO_KEYCHAIN ? noKeychain : safeStorage);
     try {
       askpass = new AskpassServer(path.join(app.getPath('userData'), 'askpass'), askRenderer);
       configureGit({ env: await askpass.start() });

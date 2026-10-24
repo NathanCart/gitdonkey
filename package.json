@@ -1,7 +1,7 @@
 {
   "name": "gitdonkey",
   "productName": "GitDonkey",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A free, open-source desktop Git client: commit graph, staging, merges and conflict resolution in a patched-modular-synth skin.",
   "main": "src/main/main.js",
   "scripts": {

@@ -60,7 +60,7 @@ Optional, and off until you set it up. Press **Generate** in the commit box (or 
 
 **Check key and load models** tests the key and lists the provider's models; leave Model empty to use the default. You can add your own instructions, like “use Conventional Commits”, and it follows the style of your recent commits anyway.
 
-What is sent, and when: only when you press Generate, GitDonkey sends the staged diff (lockfiles and binaries left out, long files trimmed), the file names, the branch name and your last few commit subjects to the provider you chose. Nothing else, and nothing at any other time. API keys are encrypted with your system keychain (Electron `safeStorage`), stay in the main process, and are only ever sent to their own provider. The message lands in the summary and description for you to read and edit before committing.
+What is sent, and when: only when you press Generate, GitDonkey sends the staged diff (lockfiles and binaries left out, long files trimmed), the file names, the branch name and your last few commit subjects to the provider you chose. Nothing else, and nothing at any other time. API keys are encrypted with your system keychain (Electron `safeStorage`), stay in the main process, and are only ever sent to their own provider. On macOS the first save asks for Keychain access; if you decline, the key still works until you quit but isn't saved, and GitDonkey offers to reopen so you can choose **Always Allow**. The builds aren't code-signed, so macOS may ask again after an update. The message lands in the summary and description for you to read and edit before committing.
 
 ## Run from source
 

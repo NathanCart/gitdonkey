@@ -160,15 +160,47 @@ test('KeyVault encrypts keys, never stores plain text, and forgets them', () => 
   };
   const vault = new KeyVault(store, safe);
   assert.equal(vault.has('openai'), false);
-  assert.equal(vault.set('openai', '  sk-secret  '), true);
+  assert.equal(vault.set('openai', '  sk-secret  '), 'saved');
   assert.equal(vault.has('openai'), true);
   assert.equal(vault.get('openai'), 'sk-secret');
   assert.ok(!JSON.stringify(data).includes('sk-secret'));
-  assert.equal(vault.set('openai', ''), false);
+  assert.equal(vault.set('openai', ''), 'cleared');
   assert.equal(vault.has('openai'), false);
   assert.throws(() => vault.set('nope', 'k'), (e) => e.kind === 'AI_CONFIG');
+});
+
+test('KeyVault: when the Keychain says no, the key lasts the session and is never written down', () => {
+  const data = {};
+  const store = { get: (k) => data[k], set: (k, v) => { data[k] = v; } };
+  let available = true;
+  let readable = true;
+  const safe = {
+    isEncryptionAvailable: () => available,
+    encryptString: (s) => {
+      if (!available) throw new Error('Encryption is not available.');
+      return Buffer.from(`enc:${s}`);
+    },
+    decryptString: (b) => {
+      if (!readable) throw new Error('Error while decrypting the ciphertext');
+      return b.toString().slice(4);
+    },
+  };
+  const vault = new KeyVault(store, safe);
+  assert.equal(vault.set('openai', 'sk-saved'), 'saved');
+  // Next launch: the Keychain prompt was declined, so the saved key can't be read or replaced.
   available = false;
-  assert.throws(() => vault.set('anthropic', 'k'), (e) => e.kind === 'AI_STORAGE');
+  readable = false;
+  assert.equal(vault.has('openai'), true);
+  assert.throws(() => vault.require('openai'), (e) => e.kind === 'AI_KEY_LOCKED' && /Always Allow/.test(e.message));
+  assert.equal(vault.set('openai', 'sk-for-now'), 'session');
+  assert.equal(vault.require('openai'), 'sk-for-now');
+  assert.ok(!JSON.stringify(data).includes('sk-for-now'));
+  assert.equal(vault.set('anthropic', 'sk-ant'), 'session');
+  assert.equal(vault.has('anthropic'), true);
+  assert.equal(new KeyVault(store, safe).has('anthropic'), false, 'gone after a restart');
+  assert.equal(vault.require('gemini'), null);
+  // Forgetting clears the session copy too.
+  assert.equal(vault.set('anthropic', ''), 'cleared');
   assert.equal(vault.has('anthropic'), false);
 });
 

@@ -101,7 +101,8 @@ function aiServer() {
 
 async function main() {
   const themes = await import(pathToFileURL(path.join(__dirname, '../../src/renderer/lib/themes.js')).href);
-  t = await launch();
+  t = await launch({ env: { GITDONKEY_NO_KEYCHAIN: '1' } });
+  t.app.process().once('exit', (code) => console.log(`      (GitDonkey exited with ${code})`));
   await win().locator('.g-row').first().waitFor({ timeout: 20000 });
 
   await step('Settings shows the theme and opens the picker over it', async () => {
@@ -216,6 +217,24 @@ async function main() {
     } finally {
       ai.server.close();
     }
+  });
+
+  await step('with the Keychain declined, an API key still works until quit, with a way to reopen', async () => {
+    await win().locator('.themes-modal .btn-key', { hasText: 'Done' }).click();
+    await win().locator('.overlay.docked').waitFor({ state: 'detached' });
+    await clickMenu('AI Commit Messages…');
+    await modal().locator('select').first().selectOption('openai');
+    await modal().locator('.field', { hasText: 'API key' }).locator('input').fill('sk-e2e-not-saved');
+    await modal().locator('.btn-key', { hasText: 'Save' }).click();
+    const notice = win().locator('.toast', { hasText: 'Key kept until you quit' });
+    await notice.waitFor();
+    if (!(await notice.locator('button', { hasText: 'Reopen GitDonkey' }).count())) throw new Error('no Reopen GitDonkey action');
+    const providers = await win().evaluate(() => window.gitdonkey.invoke('ai:providers'));
+    if (!providers.find((p) => p.id === 'openai').hasKey) throw new Error('key not kept for the session');
+    const stored = await win().evaluate(() => window.gitdonkey.invoke('store:get', 'settings'));
+    if (JSON.stringify(stored).includes('sk-e2e-not-saved')) throw new Error('key written to settings');
+    await t.shot('29-keychain-declined');
+    await openPicker();
   });
 
   await step('deleting the chosen theme falls back to Patch Bay', async () => {

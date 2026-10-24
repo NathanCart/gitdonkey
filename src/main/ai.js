@@ -273,10 +273,16 @@ async function listModels({ provider: id, key, baseUrl }, fetchImpl, { timeout =
  * API keys, encrypted with the OS keychain (Electron safeStorage) and kept in
  * the app's state file as base64. Plain-text storage is never used.
  */
+// When the system won't encrypt (on macOS: the Keychain prompt was declined,
+// and macOS keeps saying no until GitDonkey restarts), a key is kept in memory
+// for this session instead of being refused, and is never written in plain text.
+const KEYCHAIN_LOCKED = 'GitDonkey can’t read your saved API key because macOS Keychain access was declined. Reopen GitDonkey and click Always Allow, or paste the key again in AI settings to use it until you quit.';
+
 class KeyVault {
   constructor(store, safeStorage) {
     this.store = store;
     this.safe = safeStorage;
+    this.session = new Map();
   }
 
   all() {
@@ -284,10 +290,11 @@ class KeyVault {
   }
 
   has(id) {
-    return Boolean(this.all()[id]);
+    return this.session.has(id) || Boolean(this.all()[id]);
   }
 
   get(id) {
+    if (this.session.has(id)) return this.session.get(id);
     const enc = this.all()[id];
     if (!enc) return null;
     try {
@@ -297,17 +304,37 @@ class KeyVault {
     }
   }
 
+  /** The key to send, or null when there's none; throws when one is saved but can't be read right now. */
+  require(id) {
+    const key = this.get(id);
+    if (!key && this.has(id)) throw new AiError(KEYCHAIN_LOCKED, 'AI_KEY_LOCKED');
+    return key;
+  }
+
+  /** Save a key (empty forgets it). Returns 'saved', 'session' (kept until quit, see above) or 'cleared'. */
   set(id, key) {
     if (!PROVIDER[id]) throw new AiError('Unknown provider.', 'AI_CONFIG');
     const keys = { ...this.all() };
     const k = typeof key === 'string' ? key.trim() : '';
-    if (!k) delete keys[id];
-    else {
-      if (!this.safe.isEncryptionAvailable()) throw new AiError('This system has no secure storage for API keys, so GitDonkey won’t save one.', 'AI_STORAGE');
-      keys[id] = this.safe.encryptString(k).toString('base64');
+    this.session.delete(id);
+    if (!k) {
+      delete keys[id];
+      this.store.set('aiKeys', keys);
+      return 'cleared';
     }
+    let enc = null;
+    try {
+      if (this.safe.isEncryptionAvailable()) enc = this.safe.encryptString(k).toString('base64');
+    } catch {
+      enc = null;
+    }
+    if (!enc) {
+      this.session.set(id, k);
+      return 'session';
+    }
+    keys[id] = enc;
     this.store.set('aiKeys', keys);
-    return Boolean(k);
+    return 'saved';
   }
 }
 

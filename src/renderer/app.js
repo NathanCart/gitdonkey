@@ -1000,7 +1000,8 @@ class App {
         timeout: 6000,
       });
     } catch (e) {
-      toast({ type: 'error', title: 'Couldn’t write a message', message: e.message, actions: [{ label: 'AI settings…', run: () => dialogs.aiSettingsDialog(this) }] });
+      const reopen = e.kind === 'AI_KEY_LOCKED' && isMac ? [{ label: 'Reopen GitDonkey', run: () => invoke('app:relaunch') }] : [];
+      toast({ type: 'error', title: 'Couldn’t write a message', message: e.message, actions: [...reopen, { label: 'AI settings…', run: () => dialogs.aiSettingsDialog(this) }] });
     } finally {
       panel.setGenerating(false);
     }

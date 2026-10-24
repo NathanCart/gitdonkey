@@ -2,7 +2,7 @@
 // branches, interactive rebase, shortcuts.
 import { h, icon, clear, legend, kbd, logoMark } from './dom.js';
 import { openModal, formDialog, confirmDialog, field, toast } from './ui.js';
-import { git, invoke, on, kb, sep, isAbsolutePath } from './api.js';
+import { git, invoke, on, kb, sep, isAbsolutePath, isMac } from './api.js';
 import { guessRepoName, shortHash, relativeTime, pluralize } from './lib/util.js';
 import { themesDialog } from './themes-ui.js';
 
@@ -183,6 +183,19 @@ export async function settingsDialog(app) {
 // ---------------------------------------------------------------- AI commit messages
 
 /** Choose a provider, paste your own key, pick a model. */
+/** The system wouldn't encrypt the key (on macOS, the Keychain prompt was declined), so it's only kept until quitting. */
+export function keychainToast() {
+  toast({
+    type: 'warn',
+    title: 'Key kept until you quit',
+    message: isMac
+      ? 'macOS didn’t let GitDonkey use the Keychain (that’s the prompt you declined), so the key works now but isn’t saved. Reopen GitDonkey and click Always Allow to save it.'
+      : 'This system has no secure storage for GitDonkey to save the key in, so it works until you quit.',
+    actions: isMac ? [{ label: 'Reopen GitDonkey', run: () => invoke('app:relaunch') }] : [],
+    timeout: 0,
+  });
+}
+
 export async function aiSettingsDialog(app, { thenGenerate = false } = {}) {
   const providers = await invoke('ai:providers').catch(() => []);
   app.aiProviders = providers;
@@ -289,9 +302,10 @@ export async function aiSettingsDialog(app, { thenGenerate = false } = {}) {
     models[p.id] = values.model.trim();
     if (p.customBase) baseUrls[p.id] = values.baseUrl.trim();
   }
+  let keptForSession = false;
   try {
     for (const id of forget) await invoke('ai:setKey', id, null);
-    if (p && values.key.trim()) await invoke('ai:setKey', p.id, values.key.trim());
+    if (p && values.key.trim()) keptForSession = (await invoke('ai:setKey', p.id, values.key.trim())) === 'session';
   } catch (e) {
     toast({ type: 'error', title: 'Couldn’t save the key', message: e.message });
     return;
@@ -303,7 +317,8 @@ export async function aiSettingsDialog(app, { thenGenerate = false } = {}) {
     toast({ type: 'success', title: 'AI commit messages are off' });
     return;
   }
-  toast({ type: 'success', title: 'AI commit messages on', message: `${app.aiConfig().label}. Press Generate in the commit box.` });
+  if (keptForSession) keychainToast();
+  else toast({ type: 'success', title: 'AI commit messages on', message: `${app.aiConfig().label}. Press Generate in the commit box.` });
   if (thenGenerate && app.repo) app.generateMessage();
 }
 
