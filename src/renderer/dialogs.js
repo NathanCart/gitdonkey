@@ -577,7 +577,7 @@ export function shortcutsDialog() {
     ['Fetch all', `${kb('⌘⇧F')}`], ['Pull', `${kb('⌘⇧L')}`], ['Push', `${kb('⌘⇧P')}`], ['Create branch', `${kb('⌘B')}`],
     ['Stash / pop stash', `${kb('⌘⌥S')} / ${kb('⌘⌥P')}`], ['Stage all / unstage all', `${kb('⌘⇧S')} / ${kb('⌘⇧U')}`],
     ['Commit', `${kb('⌘↵')} in the message`], ['Undo / redo Git action', `${kb('⌘Z')} / ${kb('⌘⇧Z')} (outside text fields)`],
-    ['Move through commits', '↑ ↓  or  J K'], ['Next / previous change in a diff', `${kb('⌥↓')} / ${kb('⌥↑')}  or  F7 / ⇧F7`], ['Close diff, search or menu', 'Esc'], ['Toggle sidebar / panel', `${kb('⌘J')} / ${kb('⌘K')}`],
+    ['Move through commits', '↑ ↓  or  J K'], ['Move through changed files', '↑ ↓  or  J K, after clicking a file'], ['Next / previous change in a diff', `${kb('⌥↓')} / ${kb('⌥↑')}  or  F7 / ⇧F7`], ['Close diff, search or menu', 'Esc'], ['Toggle sidebar / panel', `${kb('⌘J')} / ${kb('⌘K')}`],
     ['Refresh', `${kb('⌘R')}`],
   ];
   openModal({

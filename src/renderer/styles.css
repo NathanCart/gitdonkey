@@ -673,6 +673,10 @@ body.is-patching, body.is-patching * { cursor: grabbing !important; }
 .files-count { font-size: 11px; color: var(--legend-3); font-variant-numeric: tabular-nums; }
 .files-conflicted .files-head .legend { color: var(--red); }
 .file-list { flex: 1; overflow: auto; padding-bottom: 6px; }
+/* Keyboard focus shows on the open file, not round the whole list. */
+.file-list:focus-visible { outline-offset: -2px; }
+.file-list:focus-visible:has(.file.active) { outline: none; }
+.file-list:focus-visible .file.active { box-shadow: inset 0 0 0 1px var(--focus); }
 .file-empty { padding: 0 12px 14px; color: var(--legend-3); font-size: 12px; }
 .file {
   --indent: 0;

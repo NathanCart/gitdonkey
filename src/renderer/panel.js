@@ -9,9 +9,11 @@ export class Panel {
   constructor(el, app) {
     this.el = el;
     this.app = app;
+    this.rowInfo = new WeakMap();
     this.buildWip();
     this.commitView = h('div', { class: 'cd-panel', hidden: true });
     this.el.append(this.wip, this.commitView);
+    this.el.addEventListener('keydown', (e) => this.onListKey(e));
   }
 
   // ------------------------------------------------------------ working tree
@@ -112,10 +114,17 @@ export class Panel {
     if (!tab || !this.app.data) return;
     const sel = tab.ui.selection || { type: 'wip' };
     const isWip = sel.type === 'wip';
+    // A refresh rebuilds the lists; keep the keyboard in the one you were using.
+    const focused = document.activeElement;
+    const focusKind = focused && focused.classList.contains('file-list') && this.el.contains(focused) ? focused.dataset.kind : null;
     this.wip.hidden = !isWip;
     this.commitView.hidden = isWip;
     if (isWip) this.renderWip();
     else this.renderDetails();
+    if (focusKind && !this.el.contains(document.activeElement)) {
+      const list = this.el.querySelector(`.file-list[data-kind="${focusKind}"][tabindex]`) || this.el.querySelector('.file-list[tabindex]');
+      if (list && list.offsetParent) list.focus({ preventScroll: true });
+    }
   }
 
   renderWip() {
@@ -197,7 +206,7 @@ export class Panel {
   }
 
   fileSection(kind, title, files, actions, view, emptyText) {
-    const list = h('div', { class: 'file-list', role: 'listbox', 'aria-label': `${title} files`, 'aria-multiselectable': 'true' });
+    const list = h('div', { class: 'file-list', role: 'listbox', 'aria-label': `${title} files`, 'aria-multiselectable': 'true', tabindex: files.length ? '0' : null, dataset: { kind } });
     if (!files.length) list.appendChild(h('div', { class: 'file-empty' }, emptyText || ''));
     else if (view === 'tree') this.renderTree(list, buildTree(files), kind, 0, files);
     else for (const f of files) list.appendChild(this.fileRow(f, kind, 0, files));
@@ -275,7 +284,12 @@ export class Panel {
     f.additions !== undefined && kind === 'commit' ? h('span', { class: 'file-stat' }, f.binary ? h('span', { class: 'bin' }, 'bin') : [f.additions ? h('span', { class: 'add' }, `+${f.additions}`) : null, f.deletions ? h('span', { class: 'del' }, `−${f.deletions}`) : null]) : null,
     this.rowAction(kind, [f]));
 
-    row.addEventListener('click', (e) => this.onFileClick(e, f, kind, all));
+    this.rowInfo.set(row, { f, kind });
+    row.addEventListener('click', (e) => {
+      this.onFileClick(e, f, kind, all);
+      // So ↑ ↓ carry on from here.
+      if (!e.target.closest('.row-action')) row.parentElement.focus({ preventScroll: true });
+    });
     row.addEventListener('dblclick', (e) => {
       if (e.target.closest('.row-action')) return;
       if (kind === 'unstaged') this.app.stage([f]);
@@ -328,15 +342,57 @@ export class Panel {
       const b = order.indexOf(f.path);
       if (a !== -1 && b !== -1) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
-        tab.ui.fileSel = { kind, paths: new Set(order.slice(lo, hi + 1)), anchor: cur.anchor };
+        tab.ui.fileSel = { kind, paths: new Set(order.slice(lo, hi + 1)), anchor: cur.anchor, cursor: f.path };
         this.syncRowState();
         return;
       }
     }
-    tab.ui.fileSel = { kind, paths: new Set([f.path]), anchor: f.path };
+    this.openRow(f, kind);
+  }
+
+  openRow(f, kind) {
+    this.app.tab.ui.fileSel = { kind, paths: new Set([f.path]), anchor: f.path };
     if (kind === 'commit') this.app.openFile({ ...f, kind: 'commit' });
     else if (kind === 'conflicted') this.app.openFile({ kind: 'conflict', path: f.path, status: 'U', conflict: f.conflict });
     else this.app.openFile({ kind: f.untracked ? 'untracked' : kind, path: f.path, oldPath: f.oldPath, status: f.status, untracked: f.untracked });
+  }
+
+  /** ↑ ↓ (or J K) open the next file, across the conflicted, unstaged and staged lists; ⇧ extends the selection. */
+  onListKey(e) {
+    const list = e.target;
+    if (!list.classList || !list.classList.contains('file-list')) return;
+    const STEPS = { ArrowDown: 1, ArrowUp: -1, j: 1, k: -1, Home: -Infinity, End: Infinity };
+    const step = STEPS[e.key];
+    if (step === undefined || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    const rows = [...this.el.querySelectorAll('.file-list .file[data-path]')].filter((r) => r.offsetParent);
+    if (!rows.length) return;
+    const tab = this.app.tab;
+    const sel = tab.ui.fileSel;
+    const kindOf = (r) => r.parentElement.dataset.kind;
+    let cur = sel ? rows.findIndex((r) => kindOf(r) === sel.kind && r.dataset.path === (sel.cursor || sel.anchor)) : -1;
+    if (cur < 0) cur = rows.findIndex((r) => r.classList.contains('active'));
+    if (e.shiftKey && cur >= 0 && sel) {
+      // Extend within the list the selection is in, like ⇧-click.
+      const same = rows.filter((r) => r.parentElement === rows[cur].parentElement);
+      const order = same.map((r) => r.dataset.path);
+      const at = order.indexOf(rows[cur].dataset.path);
+      const to = Math.max(0, Math.min(order.length - 1, at + step));
+      const a = Math.max(0, order.indexOf(sel.anchor));
+      const [lo, hi] = a < to ? [a, to] : [to, a];
+      tab.ui.fileSel = { kind: sel.kind, paths: new Set(order.slice(lo, hi + 1)), anchor: order[a], cursor: order[to] };
+      this.syncRowState();
+      same[to].scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    const to = cur < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, cur + step));
+    if (to === cur && sel && sel.paths.size === 1) return;
+    const row = rows[to];
+    const info = this.rowInfo.get(row);
+    if (!info) return;
+    this.openRow(info.f, info.kind);
+    if (row.parentElement !== list) row.parentElement.focus({ preventScroll: true });
+    row.scrollIntoView({ block: 'nearest' });
   }
 
   updateCommitButton() {
@@ -428,7 +484,7 @@ export class Panel {
     const adds = files.reduce((n, f) => n + (f.additions || 0), 0);
     const dels = files.reduce((n, f) => n + (f.deletions || 0), 0);
     const view = this.app.settings.fileView;
-    const list = h('div', { class: 'file-list', role: 'listbox', 'aria-label': 'Changed files' });
+    const list = h('div', { class: 'file-list', role: 'listbox', 'aria-label': 'Changed files', tabindex: files.length ? '0' : null, dataset: { kind: 'commit' } });
     if (!files.length) list.appendChild(h('div', { class: 'file-empty' }, 'No file changes in this commit.'));
     else if (view === 'tree') this.renderTree(list, buildTree(files), 'commit', 0, files);
     else for (const f of files) list.appendChild(this.fileRow(f, 'commit', 0, files));

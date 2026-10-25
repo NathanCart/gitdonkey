@@ -2,7 +2,8 @@
 
 // End-to-end: finding the changes in a long file. A map beside the diff marks
 // each change; ⌥↓ / ⌥↑ and the arrows step through them with an "n of N"
-// count; Full file opens at the first change instead of line 1.
+// count; Full file opens at the first change instead of line 1. ↑ ↓ move
+// between the changed files once one is clicked.
 
 const fs = require('fs');
 const path = require('path');
@@ -135,6 +136,51 @@ async function main() {
     git('add', 'src/settings.js');
     await refresh();
     await waitFor(async () => (await win().locator('#detail .change-ruler').isHidden()) || !(await win().locator('#detail').isVisible()), { message: 'map hidden once the change is gone' });
+  });
+
+  // Two unstaged files from the fixture, and a staged one.
+  const rows = () => win().locator('.wip-panel .file-list .file[data-path]').evaluateAll((els) => els.map((r) => `${r.parentElement.dataset.kind}:${r.dataset.path}`));
+  const active = () => win().locator('.wip-panel .file.active').evaluateAll((els) => els.map((r) => `${r.parentElement.dataset.kind}:${r.dataset.path}`).join());
+  async function waitActive(want) {
+    let open = '';
+    await waitFor(async () => (open = await active()) === want, { message: `${want} to be open` }).catch((e) => {
+      throw new Error(`${e.message}, ${open || 'nothing'} is`);
+    });
+  }
+  const headPath = () => win().locator('#detail .detail-head').innerText();
+
+  await step('↑ ↓ move between changed files, across Unstaged and Staged', async () => {
+    fs.writeFileSync(path.join(t.fx.repo, 'src/settings.js'), `${LINES.join('\n')}\nexport const staged = true;\n`);
+    git('add', 'src/settings.js');
+    await refresh();
+    await win().locator('.wip-panel .files-staged .file', { hasText: 'settings.js' }).waitFor();
+    const order = await rows();
+    if (order.length !== 3 || order[2] !== 'staged:src/settings.js') throw new Error(`rows: ${order.join(', ')}`);
+    await win().locator('.wip-panel .file', { hasText: order[0].split('/').pop() }).first().click();
+    await waitActive(order[0]);
+    await win().keyboard.press('ArrowDown');
+    await waitActive(order[1]);
+    await waitFor(async () => (await headPath()).includes(order[1].split('/').pop()), { message: 'the diff follows' });
+    await win().keyboard.press('ArrowDown');
+    await waitActive(order[2]);
+    await waitFor(async () => /Staged/i.test(await win().locator('#detail .dh-kind').innerText()), { message: 'the staged diff' });
+    await win().keyboard.press('ArrowDown');
+    await waitActive(order[2]);
+    await win().keyboard.press('ArrowUp');
+    await waitActive(order[1]);
+    await win().keyboard.press('k');
+    await waitActive(order[0]);
+    await t.shot('36-file-list-keys');
+  });
+
+  await step('⇧↓ extends the selection, and the keys still work after a refresh', async () => {
+    await win().keyboard.press('Shift+ArrowDown');
+    await waitFor(async () => (await win().locator('.wip-panel .files-unstaged .file.selected').count()) === 2, { message: 'two files selected' });
+    await refresh();
+    await win().keyboard.press('ArrowDown');
+    const order = await rows();
+    await waitActive(order[2]);
+    if (!(await win().evaluate(() => document.activeElement.classList.contains('file-list')))) throw new Error('the list lost focus');
   });
 
   await step('no renderer errors were logged', async () => {
