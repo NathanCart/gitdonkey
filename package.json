@@ -1,7 +1,7 @@
 {
   "name": "gitdonkey",
   "productName": "GitDonkey",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "A free, open-source desktop Git client: commit graph, staging, merges and conflict resolution in a patched-modular-synth skin.",
   "main": "src/main/main.js",
   "scripts": {
@@ -14,7 +14,8 @@
     "dist:mac": "electron-builder --mac dmg --arm64 --x64 --publish never",
     "dist:linux": "docker run --rm -v \"$PWD\":/src:ro -v \"$PWD/dist\":/out node:22-bookworm bash /src/scripts/linux/build.sh",
     "dist:linux:native": "electron-builder --linux AppImage deb --x64 --arm64 --publish never",
-    "test:linux": "docker run --rm -v \"$PWD/dist\":/out -v \"$PWD/scripts/linux\":/scripts:ro debian:bookworm bash /scripts/smoke.sh deb && docker run --rm -v \"$PWD/dist\":/out -v \"$PWD/scripts/linux\":/scripts:ro debian:bookworm bash /scripts/smoke.sh appimage"
+    "test:linux": "docker run --rm -v \"$PWD/dist\":/out -v \"$PWD/scripts/linux\":/scripts:ro debian:bookworm bash /scripts/smoke.sh deb && docker run --rm -v \"$PWD/dist\":/out -v \"$PWD/scripts/linux\":/scripts:ro debian:bookworm bash /scripts/smoke.sh appimage",
+    "signing:create": "bash scripts/mac/make-signing-cert.sh"
   },
   "license": "MIT",
   "devDependencies": {
@@ -149,7 +150,8 @@
       "executableArgs": [
         "--no-sandbox"
       ]
-    }
+    },
+    "afterSign": "scripts/mac/after-sign.js"
   },
   "repository": {
     "type": "git",

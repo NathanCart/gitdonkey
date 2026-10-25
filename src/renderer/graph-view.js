@@ -55,7 +55,7 @@ export class GraphView {
       const row = e.target.closest('.g-row');
       if (!row) return;
       this.scroller.focus({ preventScroll: true });
-      this.app.selectRow(Number(row.dataset.i));
+      this.app.selectRow(Number(row.dataset.i), { scroll: false });
     });
     this.rowsEl.addEventListener('dblclick', (e) => {
       const plug = e.target.closest('.plug');
@@ -70,7 +70,7 @@ export class GraphView {
       e.preventDefault();
       const i = Number(row.dataset.i);
       const plug = e.target.closest('.plug');
-      this.app.selectRow(i);
+      this.app.selectRow(i, { scroll: false });
       if (plug) this.app.refMenu(this.refFromEl(plug), e.clientX, e.clientY);
       else this.app.commitMenu(this.rows[i], e.clientX, e.clientY);
     });
@@ -89,13 +89,13 @@ export class GraphView {
         this.app.moveSelection(-Math.floor(this.scroller.clientHeight / ROW_H));
       } else if (e.key === 'Home') {
         e.preventDefault();
-        this.app.selectRow(0);
+        this.app.selectRow(0, { center: false });
       } else if (e.key === 'End') {
         e.preventDefault();
-        this.app.selectRow(this.rows.length - 1);
+        this.app.selectRow(this.rows.length - 1, { center: false });
       }
     });
-    this.app.patch.bindTargets(this.rowsEl, (el) => this.refFromEl(el));
+    this.app.patch.bindTargets(this.rowsEl, (el) => this.refFromEl(el), this.scroller);
   }
 
   refFromEl(el) {

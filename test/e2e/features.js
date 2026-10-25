@@ -562,6 +562,88 @@ async function main() {
     await waitFor(() => win().locator('.repo-banner').isHidden(), { message: 'dismissed' });
   });
 
+  // ------------------------------------------------------------ clicking and dragging in a long graph
+  const scroller = () => win().locator('.graph-scroll');
+  const scrollTop = () => scroller().evaluate((el) => el.scrollTop);
+  await step('clicking a commit selects it where it is, so a double-click lands on the same branch', async () => {
+    // Enough history to scroll: 60 commits on a branch of their own.
+    const tree = git('rev-parse', 'HEAD^{tree}').trim();
+    let parent = git('rev-parse', 'HEAD').trim();
+    for (let i = 1; i <= 60; i++) parent = git('commit-tree', tree, '-p', parent, '-m', `Filler ${i}`).trim();
+    git('update-ref', 'refs/heads/filler', parent);
+    await refresh();
+    await win().locator('.g-row', { hasText: 'Filler 60' }).waitFor();
+    await win().keyboard.press('Escape');
+    await scroller().evaluate((el) => {
+      el.scrollTop = 400;
+    });
+    await waitFor(async () => (await scrollTop()) === 400, { message: 'scrolled' });
+    // A row near the bottom of what's on screen: centring it would scroll a long way.
+    const low = await win().evaluate(() => {
+      const s = document.querySelector('.graph-scroll').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('.g-row')].filter((r) => {
+        const b = r.getBoundingClientRect();
+        return b.bottom < s.bottom - 10 && b.top > s.bottom - 160;
+      });
+      return rows.length ? rows[0].querySelector('.msg-text').textContent : null;
+    });
+    if (!low) throw new Error('no row near the bottom');
+    await win().locator('.g-row', { hasText: low }).first().click();
+    await win().locator('.g-row.selected', { hasText: low }).waitFor();
+    await win().waitForTimeout(150);
+    if ((await scrollTop()) !== 400) throw new Error(`the graph scrolled to ${await scrollTop()} on a click`);
+
+    // Double-click a branch below: its plug must not move between the clicks.
+    // Bring release/1.1 into view, near the bottom (the graph only draws rows near the screen).
+    await win().evaluate(() => {
+      const app = window.__gitdonkey;
+      const i = app.indexByHash.get(app.data.refs.local.find((b) => b.name === 'release/1.1').hash);
+      app.graph.scroller.scrollTop = Math.max(0, (i + 3) * 28 - app.graph.scroller.clientHeight);
+    });
+    const plug = win().locator('.plug', { hasText: /^release\/1\.1/ }).first();
+    await plug.waitFor();
+    await win().waitForTimeout(100);
+    const at = await scrollTop();
+    const box = await plug.boundingBox();
+    await plug.dblclick();
+    await win().waitForTimeout(150);
+    if ((await scrollTop()) !== at) throw new Error('the graph moved between the clicks');
+    const now = await plug.boundingBox();
+    if (Math.abs(now.y - box.y) > 1) throw new Error('the plug moved between the clicks');
+    // The double-click asked to check it out: a stash question if the changes are in the way, or done.
+    await waitFor(async () => (await win().locator('.modal', { hasText: 'Stash & continue' }).count()) > 0 || git('branch', '--show-current').trim() === 'release/1.1', { message: 'the double-click to check out release/1.1' });
+    if (await win().locator('.modal', { hasText: 'Stash & continue' }).count()) await modal().locator('.btn', { hasText: 'Cancel' }).click();
+    else git('checkout', '-q', 'develop');
+    await refresh();
+  });
+
+  await step('holding a branch cable at the bottom edge scrolls the graph down, and at the top scrolls it back', async () => {
+    await scroller().evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    const src = win().locator('.plug', { hasText: /^filler/ }).first();
+    await src.waitFor();
+    const a = await src.boundingBox();
+    const box = await scroller().boundingBox();
+    await win().mouse.move(a.x + 20, a.y + a.height / 2);
+    await win().mouse.down();
+    await win().mouse.move(a.x + 60, a.y + 40, { steps: 4 });
+    await win().mouse.move(box.x + box.width / 2, box.y + box.height - 12, { steps: 10 });
+    await waitFor(async () => (await scrollTop()) > 600, { message: 'the graph to scroll down while held at the edge' });
+    if (!(await win().locator('.patch-overlay').isVisible())) throw new Error('the cable should still be drawn');
+    await t.shot('52-drag-autoscroll');
+    await win().mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 });
+    const held = await scrollTop();
+    await win().waitForTimeout(300);
+    if (Math.abs((await scrollTop()) - held) > 2) throw new Error('it should stop scrolling away from the edges');
+    await win().mouse.move(box.x + box.width / 2, box.y - 10, { steps: 10 });
+    await waitFor(async () => (await scrollTop()) < held - 300, { message: 'the graph to scroll back up over the header' });
+    await win().mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 });
+    await win().mouse.up();
+    await waitFor(async () => !(await win().locator('.patch-overlay').isVisible()), { message: 'the cable to go when dropped on nothing' });
+    if (await win().locator('.menu').count()) throw new Error('dropping on nothing should open no menu');
+  });
+
   await step('no renderer errors were logged', async () => {
     if (t.errors.length) throw new Error(t.errors.join('\n'));
   });

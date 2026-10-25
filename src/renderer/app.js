@@ -891,33 +891,37 @@ class App {
 
   // ------------------------------------------------------------ selection
 
-  selectRow(i) {
+  /**
+   * Select a row. A click selects in place (so a double-click lands on the
+   * same row), keys keep it on screen, and jumps from search centre it.
+   */
+  selectRow(i, opts = {}) {
     const row = this.rows[i];
     if (!row) return;
-    if (row.wip) this.selectWip();
-    else this.selectCommit(row.hash);
+    if (row.wip) this.selectWip(opts);
+    else this.selectCommit(row.hash, opts);
   }
 
   moveSelection(delta) {
     let i = this.selectedIndex();
     if (i === -1) i = delta > 0 ? -1 : this.rows.length;
     const next = Math.max(0, Math.min(this.rows.length - 1, i + delta));
-    this.selectRow(next);
+    this.selectRow(next, { center: false });
   }
 
-  selectWip() {
+  selectWip({ scroll = true } = {}) {
     const tab = this.tab;
     const wasStash = tab.ui.selection.type === 'stash';
     tab.ui.selection = { type: 'wip' };
     tab.ui.fileSel = null;
     this.details = null;
     if (tab.ui.detail && tab.ui.detail.kind === 'commit') this.closeDetail();
-    this.graph.setSelected(this.selectedIndex());
+    this.graph.setSelected(this.selectedIndex(), { scroll });
     this.panel.render();
     if (wasStash) this.sidebar.render();
   }
 
-  async selectCommit(hash, { scroll = true, closeDetail = false } = {}) {
+  async selectCommit(hash, { scroll = true, center = true, closeDetail = false } = {}) {
     const tab = this.tab;
     let idx = this.indexByHash.get(hash);
     if (idx === undefined && tab.data.hasMore) {
@@ -933,7 +937,7 @@ class App {
     const spec = tab.ui.detail;
     if (closeDetail || (spec && !(spec.kind === 'commit' && spec.hash === hash))) this.closeDetail({ focus: false });
     this.graph.setSelected(idx ?? -1, { scroll });
-    if (scroll && idx !== undefined) this.graph.scrollToIndex(idx, { center: true });
+    if (scroll && center && idx !== undefined) this.graph.scrollToIndex(idx, { center: true });
     if (wasStash) this.sidebar.render();
     this.loadDetails(hash);
   }
