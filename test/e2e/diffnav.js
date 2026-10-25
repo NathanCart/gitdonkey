@@ -130,6 +130,41 @@ async function main() {
     await win().locator('#detail .seg-btn', { hasText: 'Hunks' }).click();
   });
 
+  await step('scrolled sideways past a long line, every change keeps its colour and the hunk buttons stay in view', async () => {
+    const file = path.join(t.fx.repo, 'src/settings.js');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('export const added1 = true;', `export const added1 = true; // ${'wide '.repeat(120)}`));
+    await refresh();
+    await win().locator('#detail .dl.add', { hasText: 'wide wide' }).waitFor();
+    await win().evaluate(() => {
+      const body = document.querySelector('#detail .detail-body');
+      body.querySelector('.dl.add').scrollIntoView({ block: 'center' });
+      body.scrollLeft = body.scrollWidth;
+    });
+    await t.shot('37-diff-scrolled-sideways');
+    const got = await win().evaluate(() => {
+      const body = document.querySelector('#detail .detail-body');
+      const left = body.getBoundingClientRect().left;
+      const right = left + body.clientWidth;
+      const rows = [...body.querySelectorAll('.dl.chg')].filter((r) => !r.textContent.includes('wide'));
+      const head = body.querySelector('.hunk-head').getBoundingClientRect();
+      const key = body.querySelector('.hunk-head .btn-key').getBoundingClientRect();
+      const out = {
+        scrolled: body.scrollLeft,
+        rows: rows.length,
+        short: rows.filter((r) => r.getBoundingClientRect().right < right - 1).map((r) => r.textContent.slice(0, 40)),
+        head: [Math.round(head.left - left), Math.round(right - head.right)],
+        key: key.left >= left && key.right <= right,
+      };
+      body.scrollLeft = 0;
+      return out;
+    });
+    if (got.scrolled < 200) throw new Error(`only scrolled ${got.scrolled}px sideways`);
+    if (!got.rows) throw new Error('no other changed rows to check');
+    if (got.short.length) throw new Error(`colour stops short on: ${got.short.join(' | ')}`);
+    if (got.head.some((d) => Math.abs(d) > 1)) throw new Error(`hunk header is ${got.head[0]}px from the left edge and ${got.head[1]}px from the right`);
+    if (!got.key) throw new Error('Stage hunk scrolled out of view');
+  });
+
   await step('no map for a file view or a diff with nothing to show', async () => {
     await win().locator('#detail .diff-unified').waitFor();
     fs.writeFileSync(path.join(t.fx.repo, 'src/settings.js'), `${LINES.join('\n')}\n`);
