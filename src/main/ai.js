@@ -302,21 +302,41 @@ async function call(fetchImpl, url, init, provider, signal) {
   try {
     res = await fetchImpl(url, { ...init, signal });
   } catch (e) {
-    if (signal && signal.aborted) throw new AiError(`${provider.name} took too long to answer.`, 'AI_TIMEOUT');
+    if (signal && signal.aborted) throw stopped(signal, provider);
     throw new AiError(`Couldn’t reach ${provider.name}${provider.id === 'ollama' ? '. Is Ollama running?' : '.'} (${e.message})`, 'AI_NETWORK');
   }
   if (!res.ok) throw await failure(res, provider);
   try {
     return await res.json();
   } catch {
+    // The answer can stall after the headers arrive (a model still thinking): stopped or timed out, say which.
+    if (signal && signal.aborted) throw stopped(signal, provider);
     throw new AiError(`${provider.name} sent a reply GitDonkey couldn’t read.`, 'AI_HTTP');
   }
 }
 
-function withTimeout(ms) {
+function stopped(signal, provider) {
+  return signal.reason === 'cancel'
+    ? new AiError('Stopped.', 'AI_CANCELLED')
+    : new AiError(`${provider.name} took too long to answer. Try again, or choose a faster model in AI settings.`, 'AI_TIMEOUT');
+}
+
+/** A signal that fires after `ms`, or when `cancel` (another signal) does, with the reason 'cancel'. */
+function withTimeout(ms, cancel = null) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), ms);
-  return { signal: ctl.signal, done: () => clearTimeout(timer) };
+  const timer = setTimeout(() => ctl.abort('timeout'), ms);
+  const onCancel = () => ctl.abort('cancel');
+  if (cancel) {
+    if (cancel.aborted) onCancel();
+    else cancel.addEventListener('abort', onCancel, { once: true });
+  }
+  return {
+    signal: ctl.signal,
+    done: () => {
+      clearTimeout(timer);
+      if (cancel) cancel.removeEventListener('abort', onCancel);
+    },
+  };
 }
 
 function headersFor(provider, key) {
@@ -342,14 +362,29 @@ function requireKey(provider, key) {
 }
 
 /** Ask the provider to write the message; resolves with the reply text. */
-async function complete({ provider: id, key, model, baseUrl }, { system, user }, fetchImpl, { timeout = TIMEOUT_MS, maxTokens = 1024 } = {}) {
+/**
+ * How hard a model may think before it answers. "Thinking" models (DeepSeek,
+ * o-series, GPT-5, Gemini 2.5) otherwise reason at length first, which for a
+ * commit message means minutes of waiting. `none` asks them not to; `low` for
+ * jobs that benefit from a moment's thought (reviews, conflicts).
+ */
+function reasoningFor(provider, model, effort) {
+  if (!effort) return {};
+  if (provider.id === 'openrouter') return { reasoning: { effort } };
+  if (provider.id === 'openai' && /^(gpt-5|o\d)/i.test(model)) {
+    return { reasoning_effort: effort === 'none' ? (/^gpt-5/i.test(model) ? 'minimal' : 'low') : effort };
+  }
+  return {};
+}
+
+async function complete({ provider: id, key, model, baseUrl }, { system, user }, fetchImpl, { timeout = TIMEOUT_MS, maxTokens = 1024, effort = 'none', signal = null } = {}) {
   const provider = PROVIDER[id];
   if (!provider) throw new AiError('Choose an AI provider first.', 'AI_CONFIG');
   requireKey(provider, key);
   const m = String(model || provider.model || '').trim();
   if (!m) throw new AiError('Enter a model name.', 'AI_CONFIG');
   const base = baseFor(provider, baseUrl);
-  const t = withTimeout(timeout);
+  const t = withTimeout(timeout, signal);
   try {
     if (provider.api === 'anthropic') {
       const j = await call(fetchImpl, `${base}/messages`, {
@@ -360,10 +395,16 @@ async function complete({ provider: id, key, model, baseUrl }, { system, user },
       return (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
     }
     if (provider.api === 'gemini') {
+      // Flash models can skip thinking altogether; Pro ones can't, but get a small budget.
+      const thinking = effort === 'none' && /flash/i.test(m) ? { thinkingBudget: 0 } : effort === 'none' || effort === 'low' ? { thinkingBudget: 1024 } : null;
       const j = await call(fetchImpl, `${base}/models/${encodeURIComponent(m.replace(/^models\//, ''))}:generateContent`, {
         method: 'POST',
         headers: headersFor(provider, key),
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: user }] }] }),
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: 'user', parts: [{ text: user }] }],
+          generationConfig: { maxOutputTokens: maxTokens + (thinking ? thinking.thinkingBudget : 0), ...(thinking && /2\.5|thinking/i.test(m) ? { thinkingConfig: thinking } : {}) },
+        }),
       }, provider, t.signal);
       return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
     }
@@ -375,14 +416,30 @@ async function complete({ provider: id, key, model, baseUrl }, { system, user },
       }, provider, t.signal);
       return (j.message && j.message.content) || '';
     }
-    const j = await call(fetchImpl, `${base}/chat/completions`, {
-      method: 'POST',
-      headers: headersFor(provider, key),
-      body: JSON.stringify({ model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
-    }, provider, t.signal);
-    const msg = j.choices && j.choices[0] && j.choices[0].message;
+    // OpenAI's own reasoning models only take max_completion_tokens; everyone else max_tokens.
+    // The limit covers any thinking as well as the answer, so thinking gets room on top.
+    const room = maxTokens + (effort === 'none' ? 0 : effort === 'low' ? Math.round(maxTokens / 2) : maxTokens);
+    const limit = provider.id === 'openai' ? { max_completion_tokens: room } : { max_tokens: room };
+    const body = { model: m, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], ...limit, ...reasoningFor(provider, m, effort) };
+    const post = (b) => call(fetchImpl, `${base}/chat/completions`, { method: 'POST', headers: headersFor(provider, key), body: JSON.stringify(b) }, provider, t.signal);
+    let j;
+    try {
+      j = await post(body);
+    } catch (e) {
+      // A model that must think refuses "don't": ask again without saying.
+      if (e.kind !== 'AI_REQUEST' || !/reason|effort|think/i.test(e.message)) throw e;
+      delete body.reasoning;
+      delete body.reasoning_effort;
+      j = await post(body);
+    }
+    const choice = j.choices && j.choices[0];
+    const msg = choice && choice.message;
     const content = msg && msg.content;
-    return Array.isArray(content) ? content.map((c) => c.text || '').join('') : content || '';
+    const text = Array.isArray(content) ? content.map((c) => c.text || '').join('') : content || '';
+    if (!text.trim() && choice && choice.finish_reason === 'length') {
+      throw new AiError(`${provider.name}’s model used up its reply thinking, before writing an answer. Try again, or choose a model that doesn’t think first.`, 'AI_LENGTH');
+    }
+    return text;
   } finally {
     t.done();
   }

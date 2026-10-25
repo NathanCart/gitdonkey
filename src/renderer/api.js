@@ -53,6 +53,21 @@ export async function invoke(channel, ...args) {
   }
 }
 
+let aiSeq = 0;
+
+/**
+ * An AI request that can be stopped. `onTick(seconds)` is called every second
+ * while it runs. Returns { promise, cancel }; a cancelled request rejects with
+ * kind AI_CANCELLED.
+ */
+export function aiRequest(channel, args, { onTick } = {}) {
+  const requestId = `ai-${Date.now()}-${++aiSeq}`;
+  const start = Date.now();
+  const timer = onTick ? setInterval(() => onTick(Math.round((Date.now() - start) / 1000)), 1000) : null;
+  const promise = invoke(channel, { ...args, requestId }).finally(() => clearInterval(timer));
+  return { promise, cancel: () => invoke('ai:cancel', requestId).catch(() => false) };
+}
+
 export function on(channel, cb) {
   return bridge.on(channel, cb);
 }

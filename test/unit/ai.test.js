@@ -79,19 +79,71 @@ test('complete: OpenAI-style chat completions (OpenAI, OpenRouter, custom)', asy
   assert.equal(c.url, 'https://api.openai.com/v1/chat/completions');
   assert.equal(c.init.method, 'POST');
   assert.equal(c.init.headers.authorization, 'Bearer sk-1');
-  assert.deepEqual(c.body, { model: 'gpt-x', messages: [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'USER' }] });
+  assert.deepEqual(c.body, { model: 'gpt-x', messages: [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'USER' }], max_completion_tokens: 1024 });
 
   const r = fakeFetch({ choices: [{ message: { content: [{ type: 'text', text: 'Add ' }, { type: 'text', text: 'carrots' }] } }] });
   assert.equal(await complete({ provider: 'openrouter', key: 'or-1' }, PROMPT, r), 'Add carrots');
   assert.equal(r.calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(r.calls[0].body.model, PROVIDERS.find((p) => p.id === 'openrouter').model);
   assert.equal(r.calls[0].init.headers['x-title'], 'GitDonkey');
+  assert.deepEqual(r.calls[0].body.reasoning, { effort: 'none' }, 'quick jobs ask thinking models not to think');
+  assert.equal(r.calls[0].body.max_tokens, 1024);
 
   const x = fakeFetch({ choices: [{ message: { content: 'ok' } }] });
   await complete({ provider: 'custom', model: 'local-model', baseUrl: 'http://localhost:1234/v1/' }, PROMPT, x);
   assert.equal(x.calls[0].url, 'http://localhost:1234/v1/chat/completions');
   assert.equal(x.calls[0].init.headers.authorization, undefined);
+  assert.equal(x.calls[0].body.max_tokens, 1024);
+  assert.equal(x.calls[0].body.reasoning, undefined, 'only providers that understand it are told how to think');
   await assert.rejects(complete({ provider: 'custom', model: 'm' }, PROMPT, x), (e) => e.kind === 'AI_CONFIG');
+});
+
+test('complete: thinking models are kept brief, and say so when they run out of room', async () => {
+  // A review gets a short think, with room for it on top of the answer.
+  const r = fakeFetch({ choices: [{ message: { content: 'ok' } }] });
+  await complete({ provider: 'openrouter', key: 'k', model: 'deepseek/deepseek-v4-flash' }, PROMPT, r, { maxTokens: 4096, effort: 'low' });
+  assert.deepEqual(r.calls[0].body.reasoning, { effort: 'low' });
+  assert.equal(r.calls[0].body.max_tokens, 6144);
+  // OpenAI's reasoning models: reasoning_effort, and "none" is as low as each goes.
+  const o = fakeFetch({ choices: [{ message: { content: 'ok' } }] });
+  await complete({ provider: 'openai', key: 'k', model: 'gpt-5-mini' }, PROMPT, o);
+  await complete({ provider: 'openai', key: 'k', model: 'o4-mini' }, PROMPT, o);
+  await complete({ provider: 'openai', key: 'k', model: 'gpt-4.1' }, PROMPT, o);
+  assert.deepEqual(o.calls.map((c) => c.body.reasoning_effort), ['minimal', 'low', undefined]);
+  // A model that must think refuses effort "none": asked again without it.
+  let n = 0;
+  const strict = async (url, init) => {
+    n += 1;
+    const body = JSON.parse(init.body);
+    if (body.reasoning) return { ok: false, status: 400, text: async () => JSON.stringify({ error: { message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' } }) };
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'thought about it' } }] }) };
+  };
+  assert.equal(await complete({ provider: 'openrouter', key: 'k', model: 'thinker' }, PROMPT, strict), 'thought about it');
+  assert.equal(n, 2);
+  // All of the reply spent thinking.
+  await assert.rejects(complete({ provider: 'openrouter', key: 'k' }, PROMPT, fakeFetch({ choices: [{ message: { content: '' }, finish_reason: 'length' }] })), (e) => e.kind === 'AI_LENGTH' && /used up its reply thinking/.test(e.message));
+  // Gemini Flash skips thinking; others get a small budget.
+  const g = fakeFetch({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] });
+  await complete({ provider: 'gemini', key: 'k', model: 'gemini-2.5-flash' }, PROMPT, g);
+  await complete({ provider: 'gemini', key: 'k', model: 'gemini-2.5-pro' }, PROMPT, g);
+  assert.deepEqual(g.calls.map((c) => c.body.generationConfig), [
+    { maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } },
+    { maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 1024 } },
+  ]);
+});
+
+test('complete: Stop cancels a request, even one stalled after its headers arrived', async () => {
+  const stall = (afterHeaders) => (url, init) => new Promise((resolve, reject) => {
+    const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    init.signal.addEventListener('abort', fail);
+    if (afterHeaders) resolve({ ok: true, status: 200, json: () => new Promise((res2, rej2) => init.signal.addEventListener('abort', () => rej2(new Error('body aborted')))) });
+  });
+  for (const afterHeaders of [false, true]) {
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 20);
+    await assert.rejects(complete({ provider: 'openai', key: 'k' }, PROMPT, stall(afterHeaders), { signal: stop.signal, timeout: 5000 }), (e) => e.kind === 'AI_CANCELLED' && e.message === 'Stopped.');
+    await assert.rejects(complete({ provider: 'openai', key: 'k' }, PROMPT, stall(afterHeaders), { timeout: 20 }), (e) => e.kind === 'AI_TIMEOUT' && /took too long/.test(e.message));
+  }
 });
 
 test('complete: Anthropic messages API', async () => {

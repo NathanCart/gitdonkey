@@ -3,23 +3,25 @@ import { h, icon, clear, jack, legend } from './dom.js';
 import { shortHash } from './lib/util.js';
 import { kb } from './api.js';
 
-function key({ id, ico, label, title, onClick, disabled, badge, badgeKind, menu }) {
+function key({ id, ico, label, title, onClick, disabled, badge, badgeKind, menu, working }) {
+  // While its action runs the key spins and can't be pressed again.
   const btn = h('button', {
-    class: ['key', menu && 'has-menu'],
+    class: ['key', menu && 'has-menu', working && 'working'],
     dataset: { key: id },
-    title,
+    title: working ? `${label}…` : title,
     'aria-label': title || label,
-    disabled,
+    'aria-busy': working ? 'true' : null,
+    disabled: disabled || working,
     onClick,
   },
-  h('span', { class: 'key-ico' }, icon(ico, { size: 19, stroke: 1.6 }), badge ? h('span', { class: ['key-badge', badgeKind] }, String(badge)) : null),
+  h('span', { class: 'key-ico' }, working ? h('span', { class: 'key-spin', 'aria-hidden': 'true' }) : icon(ico, { size: 19, stroke: 1.6 }), badge && !working ? h('span', { class: ['key-badge', badgeKind] }, String(badge)) : null),
   legend(label, 'key-legend'));
   if (!menu) return btn;
   return h('div', { class: 'key-split' }, btn, h('button', {
     class: 'key-menu',
     title: `${label} options`,
     'aria-label': `${label} options`,
-    disabled,
+    disabled: disabled || working,
     onClick: (e) => menu(e.currentTarget.parentElement),
   }, icon('chevron-down', { size: 12, stroke: 2 })));
 }
@@ -55,22 +57,22 @@ export function renderToolbar(el, app) {
 
   const keys = h('div', { class: 'tb-keys' },
     h('div', { class: 'key-group' },
-      key({ id: 'undo', ico: 'undo-2', label: 'Undo', title: undo ? `Undo: ${undo.label} (${kb('⌘Z')})` : 'Nothing to undo', disabled: !undo, onClick: () => app.undo() }),
-      key({ id: 'redo', ico: 'redo-2', label: 'Redo', title: redo ? `Redo: ${redo.label} (${kb('⌘⇧Z')})` : 'Nothing to redo', disabled: !redo, onClick: () => app.redo() })),
+      key({ id: 'undo', ico: 'undo-2', label: 'Undo', title: undo ? `Undo: ${undo.label} (${kb('⌘Z')})` : 'Nothing to undo', disabled: !undo || app.running > 0, onClick: () => app.undo(), working: app.isKeyWorking('undo') }),
+      key({ id: 'redo', ico: 'redo-2', label: 'Redo', title: redo ? `Redo: ${redo.label} (${kb('⌘⇧Z')})` : 'Nothing to redo', disabled: !redo || app.running > 0, onClick: () => app.redo(), working: app.isKeyWorking('redo') })),
     h('div', { class: 'key-group' },
       key({
         id: 'pull', ico: 'arrow-down-to-line', label: 'Pull', title: `Pull (${kb('⌘⇧L')})`, onClick: () => app.pull(),
-        badge: branch && branch.behind ? branch.behind : null, badgeKind: 'behind', menu: (anchor) => app.pullMenu(anchor), disabled: !d,
+        badge: branch && branch.behind ? branch.behind : null, badgeKind: 'behind', menu: (anchor) => app.pullMenu(anchor), disabled: !d, working: app.isKeyWorking('pull'),
       }),
-      key({ id: 'push', ico: 'arrow-up-from-line', label: 'Push', title: `Push (${kb('⌘⇧P')})`, onClick: () => app.push(), badge: branch && branch.ahead ? branch.ahead : null, badgeKind: 'ahead', disabled: !d })),
+      key({ id: 'push', ico: 'arrow-up-from-line', label: 'Push', title: `Push (${kb('⌘⇧P')})`, onClick: () => app.push(), badge: branch && branch.ahead ? branch.ahead : null, badgeKind: 'ahead', disabled: !d, working: app.isKeyWorking('push') })),
     h('div', { class: 'key-group' },
-      key({ id: 'branch', ico: 'git-branch', label: 'Branch', title: `Create branch (${kb('⌘B')})`, onClick: () => app.createBranch(), disabled: !d || head.unborn }),
+      key({ id: 'branch', ico: 'git-branch', label: 'Branch', title: `Create branch (${kb('⌘B')})`, onClick: () => app.createBranch(), disabled: !d || head.unborn, working: app.isKeyWorking('branch') }),
       // Conflicted files count too: pressing Stash then says why it can't.
-      key({ id: 'stash', ico: 'archive', label: 'Stash', title: `Stash changes (${kb('⌘⌥S')})`, onClick: () => app.stash(), disabled: !dirty && !(d && d.status.conflicted.length) }),
-      key({ id: 'pop', ico: 'archive-restore', label: 'Pop', title: `Pop latest stash (${kb('⌘⌥P')})`, onClick: () => app.popStash(), disabled: !d || !d.stashes.length, badge: d && d.stashes.length > 1 ? d.stashes.length : null, badgeKind: 'neutral' })));
+      key({ id: 'stash', ico: 'archive', label: 'Stash', title: `Stash changes (${kb('⌘⌥S')})`, onClick: () => app.stash(), disabled: !dirty && !(d && d.status.conflicted.length), working: app.isKeyWorking('stash') }),
+      key({ id: 'pop', ico: 'archive-restore', label: 'Pop', title: `Pop latest stash (${kb('⌘⌥P')})`, onClick: () => app.popStash(), disabled: !d || !d.stashes.length, badge: d && d.stashes.length > 1 ? d.stashes.length : null, badgeKind: 'neutral', working: app.isKeyWorking('pop') })));
 
   const right = h('div', { class: 'tb-right' },
-    key({ id: 'fetch', ico: 'refresh-cw', label: 'Fetch', title: `Fetch all remotes (${kb('⌘⇧F')})`, onClick: () => app.fetch(), disabled: !d || !d.remotes.length }),
+    key({ id: 'fetch', ico: 'refresh-cw', label: 'Fetch', title: `Fetch all remotes (${kb('⌘⇧F')})`, onClick: () => app.fetch(), disabled: !d || !d.remotes.length, working: app.isKeyWorking('fetch') }),
     key({ id: 'search', ico: 'search', label: 'Find', title: `Find commits (${kb('⌘F')})`, onClick: () => app.openSearch() }),
     key({ id: 'terminal', ico: 'terminal', label: 'Terminal', title: `Open in Terminal (${kb('⌘⌥T')})`, onClick: () => app.command('terminal') }),
     key({ id: 'settings', ico: 'settings', label: 'Settings', title: `Settings (${kb('⌘,')})`, onClick: () => app.command('settings') }));

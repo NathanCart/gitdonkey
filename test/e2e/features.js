@@ -113,6 +113,7 @@ function fakeGitHub() {
 /** An OpenAI-compatible endpoint that answers by what it's asked to do. */
 function fakeAi() {
   const seen = [];
+  const ctl = { slow: false, dropped: 0 };
   const answer = (system) => {
     if (/You explain Git changes/.test(system)) return 'Adds rate-limit headers to every response.\n- Exposes X-RateLimit-Remaining\n- Counts tokens per client\nWatch out: the header shows how full the bucket is.';
     if (/pull request titles/.test(system)) return JSON.stringify({ title: 'Ship rate limits and the audit log', body: 'Adds rate limiting and an audit log.\n\n## Changes\n- Rate limiter\n- Audit log' });
@@ -129,10 +130,20 @@ function fakeAi() {
       if (req.url.endsWith('/models')) return res.end(JSON.stringify({ data: [{ id: 'donkey-1' }] }));
       const sent = JSON.parse(body);
       seen.push(sent);
-      res.end(JSON.stringify({ choices: [{ message: { content: answer(sent.messages[0].content) } }] }));
+      const reply = () => res.end(JSON.stringify({ choices: [{ message: { content: answer(sent.messages[0].content) } }] }));
+      // Slow: answer in half a minute, unless GitDonkey hangs up first.
+      if (!ctl.slow) return reply();
+      const timer = setTimeout(reply, 30000);
+      res.on('close', () => {
+        if (!res.writableEnded) {
+          clearTimeout(timer);
+          ctl.dropped += 1;
+        }
+      });
+      return undefined;
     });
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, seen, url: `http://127.0.0.1:${server.address().port}/v1` })));
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, seen, ctl, url: `http://127.0.0.1:${server.address().port}/v1` })));
 }
 
 async function fetchAll() {
@@ -642,6 +653,61 @@ async function main() {
     await win().mouse.up();
     await waitFor(async () => !(await win().locator('.patch-overlay').isVisible()), { message: 'the cable to go when dropped on nothing' });
     if (await win().locator('.menu').count()) throw new Error('dropping on nothing should open no menu');
+  });
+
+  // ------------------------------------------------------------ waiting: AI and pushes
+  await step('a slow AI review counts the seconds and Stop stops it', async () => {
+    ai.ctl.slow = true;
+    try {
+      fs.writeFileSync(path.join(t.fx.repo, 'src/slow.js'), 'export const slow = 1;\n');
+      git('add', 'src/slow.js');
+      await refresh();
+      await win().locator('.g-row.g-wip').click();
+      await win().locator('.wip-panel .review-btn').click();
+      const m = modal();
+      await waitFor(async () => /Reading \d+ staged files? with .*… [2-9]s/.test(await m.innerText()), { message: 'the seconds counting up', timeout: 8000 });
+      await t.shot('53-ai-waiting');
+      const key = m.locator('.modal-foot .btn').first();
+      if ((await key.innerText()) !== 'Stop') throw new Error(`the key reads ${await key.innerText()}`);
+      await key.click();
+      await m.locator('.rv-intro', { hasText: 'Stopped.' }).waitFor();
+      await waitFor(async () => (await key.innerText()) === 'Review again', { message: 'Review again' });
+      await waitFor(() => ai.ctl.dropped >= 1, { message: 'the request to be hung up on' });
+      await m.locator('.btn-key', { hasText: 'Done' }).click();
+
+      // Generate, pressed again, stops too.
+      const asked = ai.seen.length;
+      await win().locator('.wip-panel .ai-btn', { hasText: 'Generate' }).click();
+      await waitFor(async () => /Stop · \d+s/.test(await win().locator('.wip-panel .ai-btn').innerText()), { message: 'Generate to read Stop' });
+      await waitFor(() => ai.seen.length > asked, { message: 'the request to reach the AI' });
+      await win().locator('.wip-panel .ai-btn').click();
+      await waitFor(async () => (await win().locator('.wip-panel .ai-btn').innerText()).trim() === 'Generate', { message: 'Generate again' });
+      await waitFor(() => ai.ctl.dropped >= 2, { message: 'the second request to be hung up on' });
+      if (await win().locator('.toast', { hasText: 'Couldn’t write a message' }).count()) throw new Error('stopping isn’t an error');
+    } finally {
+      ai.ctl.slow = false;
+    }
+  });
+
+  await step('while pushing, the Push key spins and can’t be pressed, and so does the branch', async () => {
+    const hook = path.join(t.fx.repo, '.git/hooks/pre-push');
+    fs.writeFileSync(hook, '#!/bin/sh\nsleep 2\n', { mode: 0o755 });
+    try {
+      git('commit', '-qm', 'Something to push');
+      await refresh();
+      await win().locator('.key[data-key="push"]').click();
+      const key = win().locator('.key[data-key="push"].working');
+      await key.waitFor();
+      if (!(await key.isDisabled())) throw new Error('Push should be disabled while it runs');
+      await win().locator('.plug.lit.working .plug-spin').first().waitFor();
+      await win().locator('.sb-sec-local .sb-item.head .sb-spin').waitFor();
+      await t.shot('54-push-working');
+      await win().locator('.toast', { hasText: /Pushed develop/ }).first().waitFor({ timeout: 15000 });
+      await waitFor(async () => !(await win().locator('.key.working, .plug.working, .sb-spin').count()), { message: 'the spinners to stop' });
+      if (git('rev-parse', 'develop').trim() !== git('rev-parse', 'origin/develop').trim()) throw new Error('not pushed');
+    } finally {
+      fs.rmSync(hook, { force: true });
+    }
   });
 
   await step('no renderer errors were logged', async () => {

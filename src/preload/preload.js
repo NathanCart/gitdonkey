@@ -8,7 +8,7 @@ const INVOKE = new Set([
   'store:get', 'store:set', 'recent:list', 'recent:remove', 'shell:openPath', 'shell:showItem',
   'shell:openExternal', 'shell:openTerminal', 'clipboard:write', 'watch:set', 'window:setTitle', 'avatar:get', 'avatar:clear', 'askpass:reply', 'credentials:status', 'credentials:remember', 'signing:keys', 'signing:publicKey',
   'ai:providers', 'ai:setKey', 'ai:models', 'ai:generate', 'ai:theme', 'ai:resolve', 'theme:remember', 'app:relaunch',
-  'gh:status', 'gh:pulls', 'gh:createPull', 'gh:setToken', 'ai:explain', 'ai:describePull', 'ai:review',
+  'gh:status', 'gh:pulls', 'gh:createPull', 'gh:setToken', 'ai:explain', 'ai:describePull', 'ai:review', 'ai:cancel',
 ]);
 const EVENTS = new Set(['repo:changed', 'git:progress', 'clone:progress', 'menu', 'open-path', 'window:focus', 'askpass:request', 'update:state']);
 

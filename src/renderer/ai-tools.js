@@ -2,7 +2,7 @@
 // request, review what's staged. All with the provider set up for commit
 // messages; nothing is sent until one of these is pressed.
 import { h, icon, clear, led } from './dom.js';
-import { invoke, isMac } from './api.js';
+import { invoke, isMac, aiRequest } from './api.js';
 import { toast, openModal } from './ui.js';
 import { pluralize } from './lib/util.js';
 import * as dialogs from './dialogs.js';
@@ -45,9 +45,10 @@ export class AiTools {
     return cfg;
   }
 
-  call(channel, args) {
+  /** A stoppable request with the AI settings filled in: { promise, cancel }. */
+  call(channel, args, opts) {
     const cfg = this.app.aiConfig();
-    return invoke(channel, { repo: this.app.repo, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl, instructions: cfg.instructions, ...args });
+    return aiRequest(channel, { repo: this.app.repo, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl, instructions: cfg.instructions, ...args }, opts);
   }
 
   failed(title, e) {
@@ -60,14 +61,23 @@ export class AiTools {
     if (!this.ready()) return;
     const repo = this.app.repo;
     const key = `${repo}:${hash}`;
-    this.explained.set(key, { loading: true });
+    const job = this.call('ai:explain', { hash }, { onTick: (s) => {
+      const x = this.explained.get(key);
+      if (x && x.loading) {
+        x.seconds = s;
+        const el = document.querySelector('.ai-card.loading .ai-wait');
+        if (el) el.textContent = `${s}s`;
+      }
+    } });
+    this.explained.set(key, { loading: true, seconds: 0, cancel: job.cancel });
     this.app.panel.render();
     try {
-      const text = await this.call('ai:explain', { hash });
+      const text = await job.promise;
       this.explained.set(key, { text, model: this.app.aiConfig().label });
       this.app.donkey.react('aiExplain');
     } catch (e) {
-      this.explained.set(key, { error: e.message });
+      if (e.kind === 'AI_CANCELLED') this.explained.delete(key);
+      else this.explained.set(key, { error: e.message });
     }
     if (this.app.repo === repo) this.app.panel.render();
   }
@@ -80,7 +90,9 @@ export class AiTools {
   block(hash) {
     const x = this.explanation(hash);
     if (!x) return null;
-    const head = h('div', { class: 'ai-head' }, icon('sparkles', { size: 13 }), h('span', null, 'Explained by AI'), h('span', { class: 'spacer' }),
+    const head = h('div', { class: 'ai-head' }, icon('sparkles', { size: 13 }), h('span', null, x.loading ? 'Explaining…' : 'Explained by AI'),
+      x.loading ? h('span', { class: 'ai-wait' }, `${x.seconds || 0}s`) : null, h('span', { class: 'spacer' }),
+      x.loading ? h('button', { class: 'btn btn-tiny ai-stop', onClick: () => x.cancel() }, 'Stop') : null,
       x.loading ? null : h('button', { class: 'icon-btn', title: 'Explain again', 'aria-label': 'Explain again', onClick: () => this.explain(hash) }, icon('rotate-cw', { size: 13 })),
       x.loading ? null : h('button', { class: 'icon-btn', title: 'Hide', 'aria-label': 'Hide the explanation', onClick: () => {
         this.explained.delete(`${this.app.repo}:${hash}`);
@@ -96,24 +108,28 @@ export class AiTools {
   /** What a branch changes compared with another, in a dialog. */
   async summarizeBranch(branch, base) {
     if (!this.ready()) return;
-    const body = h('div', { class: 'stack' }, h('div', { class: 'ai-loading' }, h('div', { class: 'skel w90' }), h('div', { class: 'skel w70' }), h('div', { class: 'skel w80' })));
+    const wait = h('p', { class: 'modal-text rv-intro' }, `Reading ${branch} with ${this.app.aiConfig().label}…`, h('span', { class: 'ai-wait' }, ' 0s'));
+    const body = h('div', { class: 'stack' }, wait, h('div', { class: 'ai-loading' }, h('div', { class: 'skel w90' }), h('div', { class: 'skel w70' }), h('div', { class: 'skel w80' })));
     let text = '';
+    const job = this.call('ai:explain', { base, head: branch }, { onTick: (s) => {
+      wait.lastChild.textContent = ` ${s}s`;
+    } });
     const copy = { label: 'Copy', run: () => this.app.copy(text, 'Summary copied'), disabled: true };
-    const m = openModal({ title: `${branch} compared with ${base}`, width: 620, body, actions: [copy, { label: 'Done', primary: true, run: (close) => close(null) }] });
+    const m = openModal({ title: `${branch} compared with ${base}`, width: 620, body, actions: [copy, { label: 'Done', primary: true, run: (close) => close(null) }], onClose: () => job.cancel() });
     try {
-      text = await this.call('ai:explain', { base, head: branch });
+      text = await job.promise;
       clear(body).append(aiText(text), h('div', { class: 'ai-by' }, `${this.app.aiConfig().label}. Check it against the diff.`));
       const btn = m.el.querySelector('.modal-foot .btn');
       if (btn) btn.disabled = false;
     } catch (e) {
-      clear(body).appendChild(h('p', { class: 'ai-error' }, e.message));
+      if (e.kind !== 'AI_CANCELLED') clear(body).appendChild(h('p', { class: 'ai-error' }, e.message));
     }
   }
 
-  /** A pull request's title and description. Throws so the dialog can say why. */
-  async describePull({ base, head }) {
-    if (!this.app.aiConfig()) throw new Error('Set up AI first, in AI settings.');
-    return this.call('ai:describePull', { base, head });
+  /** A pull request's title and description: { promise, cancel }. */
+  describePull({ base, head }, opts) {
+    if (!this.app.aiConfig()) return { promise: Promise.reject(new Error('Set up AI first, in AI settings.')), cancel: () => {} };
+    return this.call('ai:describePull', { base, head }, opts);
   }
 
   /** Review the staged changes, in a dialog that lists what it found. */
@@ -127,13 +143,24 @@ export class AiTools {
     }
     const body = h('div', { class: 'review' });
     let modal = null;
-    const again = { label: 'Review again', run: () => run() };
+    let job = null;
+    // One key: Stop while it's reading, Review again after.
+    const again = { label: 'Stop', run: () => (job ? job.cancel() : run()) };
+    const setKey = (label) => {
+      const btn = modal && modal.buttons[0];
+      if (btn) btn.textContent = label;
+    };
     const run = async () => {
+      const wait = h('span', { class: 'ai-wait' }, ' 0s');
       clear(body).append(
-        h('p', { class: 'modal-text rv-intro' }, `Reading ${pluralize(st.staged.length, 'staged file')} with ${app.aiConfig().label}…`),
+        h('p', { class: 'modal-text rv-intro' }, `Reading ${pluralize(st.staged.length, 'staged file')} with ${app.aiConfig().label}…`, wait),
         h('div', { class: 'ai-loading' }, h('div', { class: 'skel w90' }), h('div', { class: 'skel w60' }), h('div', { class: 'skel w80' })));
+      job = this.call('ai:review', {}, { onTick: (s) => {
+        wait.textContent = ` ${s}s`;
+      } });
+      setKey('Stop');
       try {
-        const r = await this.call('ai:review', {});
+        const r = await job.promise;
         app.donkey.react('aiReview', { count: r.issues.length });
         clear(body).append(
           h('div', { class: ['review-summary', r.issues.length ? 'has-issues' : 'clean'] },
@@ -151,10 +178,13 @@ export class AiTools {
               } }, `${x.file}${x.line ? `:${x.line}` : ''}`) : null)))) : null,
           h('div', { class: 'ai-by' }, `${app.aiConfig().label}. A second pair of eyes, not a guarantee.`));
       } catch (e) {
-        clear(body).appendChild(h('p', { class: 'ai-error' }, e.message));
+        clear(body).appendChild(h('p', { class: e.kind === 'AI_CANCELLED' ? 'modal-text rv-intro' : 'ai-error' }, e.kind === 'AI_CANCELLED' ? 'Stopped.' : e.message));
+      } finally {
+        job = null;
+        setKey('Review again');
       }
     };
-    modal = openModal({ title: 'AI review of the staged changes', width: 680, body, actions: [again, { label: 'Done', primary: true, run: (close) => close(null) }] });
+    modal = openModal({ title: 'AI review of the staged changes', width: 680, body, actions: [again, { label: 'Done', primary: true, run: (close) => close(null) }], onClose: () => job && job.cancel() });
     await run();
   }
 

@@ -98,6 +98,18 @@ export class GraphView {
     this.app.patch.bindTargets(this.rowsEl, (el) => this.refFromEl(el), this.scroller);
   }
 
+  /** Put spinners on (or take them off) the plugs whose branches started or stopped working. */
+  syncWorking() {
+    for (const plug of this.rowsEl.querySelectorAll('.plug')) {
+      const ref = this.refFromEl(plug);
+      if (!ref) continue;
+      const working = this.app.isRefWorking(ref);
+      if (working === plug.classList.contains('working')) continue;
+      const color = plug.style.getPropertyValue('--lane');
+      plug.replaceWith(plugEl(ref, Number(plug.dataset.ref), color, { working }));
+    }
+  }
+
   refFromEl(el) {
     const row = el.closest('.g-row');
     if (!row) return null;
@@ -218,7 +230,7 @@ export class GraphView {
     const cell = h('div', { class: 'g-cell g-refs' });
     if (!refs.length) return cell;
     const plugs = h('div', { class: 'plugs' });
-    refs.forEach((r, idx) => plugs.appendChild(plugEl(r, idx, color)));
+    refs.forEach((r, idx) => plugs.appendChild(plugEl(r, idx, color, { working: this.app.isRefWorking(r) })));
     cell.appendChild(plugs);
     if (refs.length > 1) {
       cell.appendChild(h('span', { class: 'plug-more', title: refs.map((r) => r.name).join('\n') }, `+${refs.length - 1}`));
@@ -439,16 +451,19 @@ function cable(ctx, x1, y1, x2, y2, color, dashed, sheath) {
   if (dashed) ctx.setLineDash([]);
 }
 
-export function plugEl(ref, idx, color) {
+export function plugEl(ref, idx, color, { working = false } = {}) {
   const lit = ref.isHead;
   const el = h('span', {
-    class: ['plug', `plug-${ref.type}`, lit && 'lit'],
+    class: ['plug', `plug-${ref.type}`, lit && 'lit', working && 'working'],
+    'aria-busy': working ? 'true' : null,
     style: { '--lane': color },
     dataset: ref.type === 'tag' || ref.type === 'head' ? { ref: String(idx) } : { ref: String(idx), patchable: '1' },
     draggable: ref.type === 'tag' ? 'false' : 'true',
     title: plugTitle(ref),
   });
-  if (ref.type === 'tag') el.appendChild(icon('tag', { size: 11 }));
+  // Something's being done to it (push, pull, checkout…): a spinner where its jack or cloud is.
+  if (working) el.appendChild(h('span', { class: 'plug-spin', 'aria-hidden': 'true' }));
+  else if (ref.type === 'tag') el.appendChild(icon('tag', { size: 11 }));
   else if (ref.type === 'remote') el.appendChild(icon('cloud', { size: 12 }));
   else if (ref.type === 'head') el.appendChild(icon('crosshair', { size: 11 }));
   else el.appendChild(h('span', { class: 'plug-jack' }));

@@ -1,5 +1,5 @@
 // GitDonkey renderer controller: state, refresh, actions, menus, tabs.
-import { git, invoke, on, pathForFile, isMac, kb, revealLabel } from './api.js';
+import { git, invoke, on, pathForFile, isMac, kb, revealLabel, aiRequest } from './api.js';
 import { h, icon, clear, led, logoMark } from './dom.js';
 import { toast, confirmDialog, choiceDialog, promptDialog, formDialog, contextMenu, menuFromButton, closeMenus, hasOpenModal } from './ui.js';
 import { computeGraph } from './lib/graph-layout.js';
@@ -86,6 +86,8 @@ class App {
     this.details = null;
     this.detailsToken = 0;
     this.busy = [];
+    this.running = 0;
+    this.marks = new Map();
     this.progress = null;
     this.loadingMore = false;
     this.refreshing = null;
@@ -1049,9 +1051,67 @@ class App {
 
   // ------------------------------------------------------------ running operations
 
-  async run(label, fn, { success, refresh = true, busy = true, autoStash = false } = {}) {
+  // ------------------------------------------------------------ what's working
+
+  /**
+   * Mark toolbar keys ('push', 'pull'…) and branches ('local:main',
+   * 'remote:origin/main', 'remotes:origin', 'remotes:*') as working: they
+   * spin, and the keys can't be pressed again, until the returned function
+   * is called.
+   */
+  working({ keys = [], refs = [] } = {}) {
+    const repo = this.repo;
+    const ids = [...keys.filter(Boolean).map((k) => `${repo}|key:${k}`), ...refs.filter(Boolean).map((r) => `${repo}|${r}`)];
+    for (const id of ids) this.marks.set(id, (this.marks.get(id) || 0) + 1);
+    this.renderWorking();
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      for (const id of ids) {
+        const n = (this.marks.get(id) || 1) - 1;
+        if (n) this.marks.set(id, n);
+        else this.marks.delete(id);
+      }
+      this.renderWorking();
+    };
+  }
+
+  isKeyWorking(key) {
+    return this.marks.has(`${this.repo}|key:${key}`);
+  }
+
+  isRefWorking(ref) {
+    const has = (id) => this.marks.has(`${this.repo}|${id}`);
+    if (!ref) return false;
+    if (ref.type === 'local') return has(`local:${ref.name}`);
+    if (ref.type === 'remote') return has(`remote:${ref.name}`) || has(`remotes:${ref.remote}`) || has('remotes:*');
+    return false;
+  }
+
+  /** Show what's working now, touching only the plugs and items that changed (a rebuild would eat a double-click). */
+  renderWorking() {
+    if (!this.tab || !this.tab.root || !this.data) return;
+    renderToolbar(this.els.toolbar, this);
+    this.graph.syncWorking();
+    this.sidebar.syncWorking();
+  }
+
+  /** The working mark for a ref the patch / merge menus hand over. */
+  refMark(ref) {
+    if (!ref) return null;
+    if (ref.type === 'local') return `local:${ref.name}`;
+    if (ref.type === 'remote') return `remote:${ref.name}`;
+    return null;
+  }
+
+  async run(label, fn, { success, refresh = true, busy = true, autoStash = false, working = null } = {}) {
     if (busy) this.beginBusy(label);
     const repo = this.repo;
+    // Undo and Redo wait until it's all done, so they never undo the action before this one.
+    this.running += 1;
+    if (this.running === 1) renderToolbar(this.els.toolbar, this);
+    const unmark = working ? this.working(working) : null;
     try {
       let r;
       try {
@@ -1086,8 +1146,14 @@ class App {
       this.handleError(label, e);
       return null;
     } finally {
+      if (unmark) unmark();
       if (busy) this.endBusy();
-      if (refresh) await this.refresh();
+      try {
+        if (refresh) await this.refresh();
+      } finally {
+        this.running -= 1;
+        if (!this.running && this.tab && this.tab.root) renderToolbar(this.els.toolbar, this);
+      }
     }
   }
 
@@ -1206,18 +1272,20 @@ class App {
 
   async undo() {
     const tab = this.tab;
+    if (this.running) return;
     const entry = tab && tab.ui.undo.pop();
     if (!entry) return;
-    const ok = await this.run(`Undo ${entry.label}`, entry.undo, { success: `Undid: ${entry.label}` });
+    const ok = await this.run(`Undo ${entry.label}`, entry.undo, { success: `Undid: ${entry.label}`, working: { keys: ['undo'] } });
     if (ok) tab.ui.redo.push(entry);
     renderToolbar(this.els.toolbar, this);
   }
 
   async redo() {
     const tab = this.tab;
+    if (this.running) return;
     const entry = tab && tab.ui.redo.pop();
     if (!entry) return;
-    const ok = await this.run(`Redo ${entry.label}`, entry.redo, { success: `Redid: ${entry.label}` });
+    const ok = await this.run(`Redo ${entry.label}`, entry.redo, { success: `Redid: ${entry.label}`, working: { keys: ['redo'] } });
     if (ok) tab.ui.undo.push(entry);
     renderToolbar(this.els.toolbar, this);
   }
@@ -1357,12 +1425,18 @@ class App {
     if (!ai) return dialogs.aiSettingsDialog(this, { thenGenerate: true });
     const panel = this.panel;
     const tab = this.tab;
-    if (!tab || panel.generating) return;
+    if (!tab) return;
+    // Pressed again while it's writing: stop.
+    if (panel.generating) {
+      if (this.generation) this.generation.cancel();
+      return;
+    }
     const before = panel.message();
     const amend = panel.amendBox.checked;
     panel.setGenerating(true);
+    this.generation = aiRequest('ai:generate', { repo: tab.root, provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, instructions: ai.instructions, amend }, { onTick: (s) => panel.setGenerating(true, s) });
     try {
-      const r = await invoke('ai:generate', { repo: tab.root, provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, instructions: ai.instructions, amend });
+      const r = await this.generation.promise;
       const message = r.description ? `${r.summary}\n\n${r.description}` : r.summary;
       // The user may have switched tabs while it was writing.
       if (this.tab === tab) panel.setMessage(message);
@@ -1376,9 +1450,11 @@ class App {
         timeout: 6000,
       });
     } catch (e) {
+      if (e.kind === 'AI_CANCELLED') return;
       const reopen = e.kind === 'AI_KEY_LOCKED' && isMac ? [{ label: 'Reopen GitDonkey', run: () => invoke('app:relaunch') }] : [];
       toast({ type: 'error', title: 'Couldn’t write a message', message: e.message, actions: [...reopen, { label: 'AI settings…', run: () => dialogs.aiSettingsDialog(this) }] });
     } finally {
+      this.generation = null;
       panel.setGenerating(false);
     }
   }
@@ -1430,7 +1506,7 @@ class App {
         return this.checkoutBranch(local.name);
       }
       const prev = this.headRef();
-      const r = await this.run(`Check out ${ref.name}`, () => git(this.repo, 'checkoutRemote', ref.name, ref.branchName), { autoStash: true });
+      const r = await this.run(`Check out ${ref.name}`, () => git(this.repo, 'checkoutRemote', ref.name, ref.branchName), { autoStash: true, working: { refs: [`remote:${ref.name}`] } });
       if (r) {
         const repo = this.repo;
         this.pushUndo({ label: `check out ${ref.branchName}`, undo: async () => {
@@ -1447,7 +1523,7 @@ class App {
   async checkoutBranch(name) {
     const prev = this.headRef();
     const repo = this.repo;
-    const r = await this.run(`Check out ${name}`, () => git(repo, 'checkout', name), { autoStash: true });
+    const r = await this.run(`Check out ${name}`, () => git(repo, 'checkout', name), { autoStash: true, working: { refs: [`local:${name}`] } });
     if (r) this.pushUndo({ label: `check out ${name}`, undo: this.restoreHeadFn(prev), redo: () => git(repo, 'checkout', name) });
     return r;
   }
@@ -1475,7 +1551,7 @@ class App {
     if (!v) return;
     const repo = this.repo;
     const prev = this.headRef();
-    const r = await this.run(`Create branch ${v.name}`, () => git(repo, 'createBranch', v.name, target, { checkout: v.checkout }), { autoStash: v.checkout });
+    const r = await this.run(`Create branch ${v.name}`, () => git(repo, 'createBranch', v.name, target, { checkout: v.checkout }), { autoStash: v.checkout, working: { keys: ['branch'] } });
     if (r) {
       this.pushUndo({
         label: `create branch ${v.name}`,
@@ -1506,7 +1582,7 @@ class App {
       });
       if (!ok) return;
     }
-    const r = await this.run(`Delete ${name}`, () => git(repo, 'deleteBranch', name, { force: true }));
+    const r = await this.run(`Delete ${name}`, () => git(repo, 'deleteBranch', name, { force: true }), { working: { refs: [`local:${name}`] } });
     if (r) {
       this.pushUndo({
         label: `delete ${name}`,
@@ -1573,6 +1649,7 @@ class App {
     }
     return this.run(`Merge ${ref.name} into ${cur}`, () => git(this.repo, 'merge', this.refName(ref)), {
       success: (r) => (/Already up to date/i.test(r.output || '') ? 'Already up to date' : `Merged ${ref.name} into ${cur}`),
+      working: { refs: [this.currentBranch && `local:${this.currentBranch}`, this.refMark(ref)] },
     });
   }
 
@@ -1580,11 +1657,12 @@ class App {
     const cur = this.currentBranch || 'HEAD';
     return this.run(`Rebase ${cur} onto ${ref.name}`, () => git(this.repo, 'rebase', this.refName(ref)), {
       success: (r) => (/up to date/i.test(r.output || '') ? `${cur} is already up to date` : `Rebased ${cur} onto ${ref.name}`),
+      working: { refs: [this.currentBranch && `local:${this.currentBranch}`, this.refMark(ref)] },
     });
   }
 
   fastForward(branch, targetRef) {
-    return this.run(`Fast-forward ${branch}`, () => git(this.repo, 'fastForwardBranch', branch, targetRef), { success: `Fast-forwarded ${branch}` });
+    return this.run(`Fast-forward ${branch}`, () => git(this.repo, 'fastForwardBranch', branch, targetRef), { success: `Fast-forwarded ${branch}`, working: { refs: [`local:${branch}`] } });
   }
 
   async checkoutThen(name, then) {
@@ -1630,11 +1708,11 @@ class App {
   }
 
   async cherryPick(hash) {
-    await this.run(`Cherry-pick ${shortHash(hash)}`, () => git(this.repo, 'cherryPick', hash), { success: `Cherry-picked ${shortHash(hash)} onto ${this.currentBranch || 'HEAD'}` });
+    await this.run(`Cherry-pick ${shortHash(hash)}`, () => git(this.repo, 'cherryPick', hash), { success: `Cherry-picked ${shortHash(hash)} onto ${this.currentBranch || 'HEAD'}`, working: { refs: [this.currentBranch && `local:${this.currentBranch}`] } });
   }
 
   async revert(hash) {
-    await this.run(`Revert ${shortHash(hash)}`, () => git(this.repo, 'revert', hash), { success: `Reverted ${shortHash(hash)}` });
+    await this.run(`Revert ${shortHash(hash)}`, () => git(this.repo, 'revert', hash), { success: `Reverted ${shortHash(hash)}`, working: { refs: [this.currentBranch && `local:${this.currentBranch}`] } });
   }
 
   async reset(hash, mode) {
@@ -1655,7 +1733,7 @@ class App {
       }
     }
     const prev = this.headHash;
-    const r = await this.run(`Reset ${cur} (${mode})`, () => git(repo, 'reset', hash, mode), { success: `${cur} reset to ${shortHash(hash)}` });
+    const r = await this.run(`Reset ${cur} (${mode})`, () => git(repo, 'reset', hash, mode), { success: `${cur} reset to ${shortHash(hash)}`, working: { refs: [this.currentBranch && `local:${this.currentBranch}`] } });
     if (r) {
       this.pushUndo({
         label: `${mode} reset to ${shortHash(hash)}`,
@@ -1740,8 +1818,9 @@ class App {
       toast({ type: 'info', title: 'Nothing to stash' });
       return;
     }
+    if (this.isKeyWorking('stash')) return;
     const message = this.panel.summary.value.trim();
-    const r = await this.run('Stash', () => git(this.repo, 'stashSave', { message, includeUntracked: true }), { success: 'Changes stashed' });
+    const r = await this.run('Stash', () => git(this.repo, 'stashSave', { message, includeUntracked: true }), { success: 'Changes stashed', working: { keys: ['stash'] } });
     if (r && message) this.panel.setMessage('', { amend: false });
   }
 
@@ -1755,7 +1834,8 @@ class App {
   }
 
   async applyStash(stash, { pop }) {
-    const r = await this.run(`${pop ? 'Pop' : 'Apply'} stash`, () => git(this.repo, 'stashApply', stash.ref, { pop }), { success: pop ? 'Stash popped' : 'Stash applied' });
+    if (pop && this.isKeyWorking('pop')) return;
+    const r = await this.run(`${pop ? 'Pop' : 'Apply'} stash`, () => git(this.repo, 'stashApply', stash.ref, { pop }), { success: pop ? 'Stash popped' : 'Stash applied', working: { keys: [pop ? 'pop' : null] } });
     if (r) this.selectWip();
   }
 
@@ -1796,9 +1876,10 @@ class App {
       await this.refresh();
       return;
     }
+    if (this.isKeyWorking('fetch')) return;
     const off = this.progressHandler();
     try {
-      const r = await this.run('Fetch', () => git(this.repo, 'fetch', {}), { success: 'Fetched all remotes' });
+      const r = await this.run('Fetch', () => git(this.repo, 'fetch', {}), { success: 'Fetched all remotes', working: { keys: ['fetch'], refs: ['remotes:*'] } });
       if (r) this.pulls.load(this.tab, { force: true });
     } finally {
       off();
@@ -1808,7 +1889,7 @@ class App {
   async fetchRemote(name) {
     const off = this.progressHandler();
     try {
-      await this.run(`Fetch ${name}`, () => git(this.repo, 'fetch', { remote: name }), { success: `Fetched ${name}` });
+      await this.run(`Fetch ${name}`, () => git(this.repo, 'fetch', { remote: name }), { success: `Fetched ${name}`, working: { refs: [`remotes:${name}`] } });
     } finally {
       off();
     }
@@ -1830,9 +1911,11 @@ class App {
       toast({ type: 'info', title: `${d.refs.head.branch} has no upstream`, message: 'Choose which remote branch to pull from.', actions: [{ label: 'Set upstream', run: () => this.setUpstreamFor(d.refs.head.branch) }] });
       return;
     }
+    if (this.isKeyWorking('pull')) return null;
     const off = this.progressHandler();
     try {
       return await this.run(`Pull ${mode === 'rebase' ? '(rebase)' : mode === 'ff-only' ? '(fast-forward only)' : ''}`.trim(), () => git(this.repo, 'pull', { mode }), {
+        working: { keys: ['pull'], refs: [`local:${b.name}`, `remote:${b.upstream}`] },
         success: (r) => (/Already up to date/i.test(r.output || '') ? 'Already up to date' : `Pulled ${b.upstream} into ${b.name}`),
         autoStash: true,
       });
@@ -1843,7 +1926,7 @@ class App {
 
   async push({ force = false } = {}) {
     const d = this.data;
-    if (!d) return;
+    if (!d || this.isKeyWorking('push')) return;
     const head = d.refs.head;
     if (head.detached || head.unborn) {
       toast({ type: 'info', title: head.unborn ? 'Nothing to push yet' : 'Not on a branch', message: head.unborn ? 'Make the first commit, then push.' : 'Check out a branch to push it.' });
@@ -1884,6 +1967,7 @@ class App {
     }
     const off = this.progressHandler();
     this.beginBusy(`Push ${b.name}`);
+    const unmark = this.working({ keys: ['push'], refs: [`local:${b.name}`, `remote:${remote}/${remoteBranch}`] });
     let rejected = null;
     try {
       await git(this.repo, 'push', { remote, branch: b.name, remoteBranch, setUpstream, force });
@@ -1893,6 +1977,7 @@ class App {
       if (e.kind === 'PUSH_REJECTED' && !force) rejected = e;
       else this.handleError('Push', e);
     } finally {
+      unmark();
       this.endBusy();
       off();
     }
@@ -1911,7 +1996,7 @@ class App {
   async pushTo(branch, remote, remoteBranch) {
     const off = this.progressHandler();
     try {
-      await this.run(`Push ${branch} to ${remote}/${remoteBranch}`, () => git(this.repo, 'push', { remote, branch, remoteBranch }), { success: `Pushed ${branch} to ${remote}/${remoteBranch}` });
+      await this.run(`Push ${branch} to ${remote}/${remoteBranch}`, () => git(this.repo, 'push', { remote, branch, remoteBranch }), { success: `Pushed ${branch} to ${remote}/${remoteBranch}`, working: { refs: [`local:${branch}`, `remote:${remote}/${remoteBranch}`] } });
     } finally {
       off();
     }
@@ -1920,7 +2005,7 @@ class App {
   async deleteRemoteBranch(ref) {
     const ok = await confirmDialog({ title: `Delete ${ref.name}?`, message: `Delete the branch ${ref.branchName} from ${ref.remote}. Everyone loses it on their next fetch.`, okLabel: 'Delete from remote', danger: true });
     if (!ok) return;
-    await this.run(`Delete ${ref.name}`, () => git(this.repo, 'deleteRemoteBranch', ref.remote, ref.branchName), { success: `Deleted ${ref.name}` });
+    await this.run(`Delete ${ref.name}`, () => git(this.repo, 'deleteRemoteBranch', ref.remote, ref.branchName), { success: `Deleted ${ref.name}`, working: { refs: [`remote:${ref.name}`] } });
   }
 
   async addRemote() {

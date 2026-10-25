@@ -486,6 +486,20 @@ function registerIpc() {
   });
   ipcMain.handle('avatar:clear', () => avatars.clear().then(() => true));
 
+  // AI requests the renderer can stop: each carries a requestId, and ai:cancel aborts it.
+  const aiJobs = new Map();
+  const aiJob = (requestId) => {
+    const ctl = new AbortController();
+    const id = typeof requestId === 'string' && requestId ? requestId : null;
+    if (id) aiJobs.set(id, ctl);
+    return { signal: ctl.signal, done: () => id && aiJobs.delete(id) };
+  };
+  ipcMain.handle('ai:cancel', (_e, requestId) => {
+    const ctl = aiJobs.get(requestId);
+    if (ctl) ctl.abort();
+    return Boolean(ctl);
+  });
+
   // AI commit messages. Keys go in and never come back out to the renderer.
   ipcMain.handle('ai:providers', () => PROVIDERS.map((p) => ({ ...p, hasKey: vault.has(p.id) })));
   ipcMain.handle('ai:setKey', (_e, id, key) => {
@@ -504,19 +518,23 @@ function registerIpc() {
       return fail(e);
     }
   });
-  ipcMain.handle('ai:generate', async (_e, { repo, provider, model, baseUrl, instructions, amend } = {}) => {
+  ipcMain.handle('ai:generate', async (_e, { repo, provider, model, baseUrl, instructions, amend, requestId } = {}) => {
+    const job = aiJob(requestId);
     try {
       const r = repos.get(repo);
       if (!r) throw new Error('Repository is not open');
       const ctx = await r.commitContext({ amend: Boolean(amend) });
       if (!ctx.files.length) throw new AiError('Stage some changes first, so there’s something to describe.', 'AI_NOTHING');
-      const text = await complete({ provider, key: vault.require(provider), model, baseUrl }, buildPrompt({ ...ctx, instructions, amend: Boolean(amend) }), aiFetch);
+      const text = await complete({ provider, key: vault.require(provider), model, baseUrl }, buildPrompt({ ...ctx, instructions, amend: Boolean(amend) }), aiFetch, { signal: job.signal });
       return ok({ ...parseMessage(text), model: (model || (PROVIDER[provider] && PROVIDER[provider].model) || '').trim() });
     } catch (e) {
       return fail(e);
+    } finally {
+      job.done();
     }
   });
-  ipcMain.handle('ai:resolve', async (_e, { provider, model, baseUrl, path: file, operation, oursLabel, theirsLabel, conflicts } = {}) => {
+  ipcMain.handle('ai:resolve', async (_e, { provider, model, baseUrl, path: file, operation, oursLabel, theirsLabel, conflicts, requestId } = {}) => {
+    const job = aiJob(requestId);
     try {
       const lines = (x) => Array.isArray(x) && x.every((l) => typeof l === 'string');
       if (typeof file !== 'string' || !Array.isArray(conflicts) || !conflicts.length || conflicts.length > 200) throw new AiError('Nothing to resolve.', 'AI_CONFIG');
@@ -525,9 +543,11 @@ function registerIpc() {
         return { index: c.index, ours: c.ours, theirs: c.theirs, base: c.base || null, before: lines(c.before) ? c.before : [], after: lines(c.after) ? c.after : [] };
       });
       const prompt = buildConflictPrompt({ path: file, operation, oursLabel, theirsLabel, conflicts: clean });
-      return ok(await complete({ provider, key: vault.require(provider), model, baseUrl }, prompt, aiFetch, { maxTokens: 8192, timeout: 120000 }));
+      return ok(await complete({ provider, key: vault.require(provider), model, baseUrl }, prompt, aiFetch, { maxTokens: 8192, timeout: 120000, effort: 'low', signal: job.signal }));
     } catch (e) {
       return fail(e);
+    } finally {
+      job.done();
     }
   });
 
@@ -582,44 +602,56 @@ function registerIpc() {
     return r;
   };
   const ai = ({ provider, model, baseUrl }) => ({ provider, key: vault.require(provider), model, baseUrl });
-  ipcMain.handle('ai:explain', async (_e, { repo, hash, base, head, ...cfg } = {}) => {
+  ipcMain.handle('ai:explain', async (_e, { repo, hash, base, head, requestId, ...cfg } = {}) => {
+    const job = aiJob(requestId);
     try {
       const r = aiRepo(repo);
       const material = hash ? await r.commitPatch(hash) : await r.rangePatch(base, head);
       if (!hash && !material.range.commits.length) throw new AiError(`${head} has no commits that ${base} doesn’t.`, 'AI_NOTHING');
-      const text = await complete(ai(cfg), buildExplainPrompt(material), aiFetch, { maxTokens: 1500 });
+      const text = await complete(ai(cfg), buildExplainPrompt(material), aiFetch, { maxTokens: 1500, signal: job.signal });
       return ok(String(text || '').trim());
     } catch (e) {
       return fail(e);
+    } finally {
+      job.done();
     }
   });
-  ipcMain.handle('ai:describePull', async (_e, { repo, base, head, ...cfg } = {}) => {
+  ipcMain.handle('ai:describePull', async (_e, { repo, base, head, requestId, ...cfg } = {}) => {
+    const job = aiJob(requestId);
     try {
       const m = await aiRepo(repo).rangePatch(base, head);
       if (!m.range.commits.length) throw new AiError(`${head} has no commits that ${base} doesn’t.`, 'AI_NOTHING');
-      const text = await complete(ai(cfg), buildPullPrompt({ ...m.range, files: m.files, diff: m.diff, instructions: cfg.instructions }), aiFetch, { maxTokens: 2048 });
+      const text = await complete(ai(cfg), buildPullPrompt({ ...m.range, files: m.files, diff: m.diff, instructions: cfg.instructions }), aiFetch, { maxTokens: 2048, signal: job.signal });
       return ok(parsePullReply(text));
     } catch (e) {
       return fail(e);
+    } finally {
+      job.done();
     }
   });
-  ipcMain.handle('ai:review', async (_e, { repo, ...cfg } = {}) => {
+  ipcMain.handle('ai:review', async (_e, { repo, requestId, ...cfg } = {}) => {
+    const job = aiJob(requestId);
     try {
       const ctx = await aiRepo(repo).commitContext({ amend: false });
       if (!ctx.files.length) throw new AiError('Stage some changes first, so there’s something to review.', 'AI_NOTHING');
-      const text = await complete(ai(cfg), buildReviewPrompt(ctx), aiFetch, { maxTokens: 4096, timeout: 120000 });
+      const text = await complete(ai(cfg), buildReviewPrompt(ctx), aiFetch, { maxTokens: 4096, timeout: 120000, effort: 'low', signal: job.signal });
       return ok({ ...parseReviewReply(text), files: ctx.files.length });
     } catch (e) {
       return fail(e);
+    } finally {
+      job.done();
     }
   });
 
-  ipcMain.handle('ai:theme', async (_e, { provider, model, baseUrl, description } = {}) => {
+  ipcMain.handle('ai:theme', async (_e, { provider, model, baseUrl, description, requestId } = {}) => {
+    const job = aiJob(requestId);
     try {
       if (typeof description !== 'string' || !description.trim()) throw new AiError('Describe the theme you want first.', 'AI_CONFIG');
-      return ok(await complete({ provider, key: vault.require(provider), model, baseUrl }, buildThemePrompt(description), aiFetch));
+      return ok(await complete({ provider, key: vault.require(provider), model, baseUrl }, buildThemePrompt(description), aiFetch, { maxTokens: 2048, signal: job.signal }));
     } catch (e) {
       return fail(e);
+    } finally {
+      job.done();
     }
   });
 

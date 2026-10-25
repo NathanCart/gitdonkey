@@ -6,7 +6,7 @@ import { findAll, rangeIn } from './lib/find.js';
 import { parseLfsPointer, lfsDiff } from './lib/lfs.js';
 import { parseConflicts, resolveConflicts, conflictCount, conflictContext, parseResolutionReply } from './lib/conflicts.js';
 import { splitPath, languageFor, imageMime, shortHash, relativeTime, fullDate, pluralize } from './lib/util.js';
-import { git, invoke, kb } from './api.js';
+import { git, invoke, kb, aiRequest } from './api.js';
 import { confirmDialog } from './ui.js';
 import { aiSettingsDialog } from './dialogs.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
@@ -882,11 +882,11 @@ export class DetailView {
       h('button', {
         class: 'btn btn-small ai-resolve',
         dataset: { action: 'ai-resolve' },
-        disabled: busy || m.manual || !open.length,
+        disabled: !busy && (m.manual || !open.length),
         'aria-busy': busy ? 'true' : null,
-        title: ai ? `Suggest a resolution for each conflict with ${ai.label}. Nothing changes until you use one.` : 'Uses the same AI provider and key as AI commit messages',
-        onClick: () => this.aiResolve(),
-      }, icon('sparkles', { size: 13 }), busy ? 'Thinking…' : ai ? 'Resolve with AI' : 'Set up AI…'),
+        title: busy ? 'Thinking about the conflicts. Press to stop.' : ai ? `Suggest a resolution for each conflict with ${ai.label}. Nothing changes until you use one.` : 'Uses the same AI provider and key as AI commit messages',
+        onClick: () => (busy ? m.ai.cancel() : this.aiResolve()),
+      }, icon('sparkles', { size: 13 }), h('span', { class: 'ai-resolve-label' }, busy ? `Stop · ${m.ai.seconds || 0}s` : ai ? 'Resolve with AI' : 'Set up AI…')),
     ];
   }
 
@@ -936,14 +936,19 @@ export class DetailView {
     const op = this.app.data && this.app.data.opState;
     const first = open[0];
     const operation = op ? `a ${op.type} is in progress` : /stash/i.test(`${first.oursLabel} ${first.theirsLabel}`) ? 'a stash was applied on top of local changes' : 'a merge';
-    m.ai = { busy: true, status: `Asking ${ai.label} about ${pluralize(open.length, 'conflict')}…` };
+    const job = aiRequest('ai:resolve', {
+      provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, path: s.path, operation,
+      oursLabel: first.oursLabel, theirsLabel: first.theirsLabel,
+      conflicts: open.map((c) => ({ index: c.index, ours: c.ours, base: c.base, theirs: c.theirs, before: c.before, after: c.after })),
+    }, { onTick: (sec) => {
+      if (m.ai && m.ai.busy) m.ai.seconds = sec;
+      const label = this.body.querySelector('.ai-resolve-label');
+      if (label && m.ai && m.ai.busy) label.textContent = `Stop · ${sec}s`;
+    } });
+    m.ai = { busy: true, seconds: 0, cancel: job.cancel, status: `Asking ${ai.label} about ${pluralize(open.length, 'conflict')}…` };
     this.renderMerge();
     try {
-      const text = await invoke('ai:resolve', {
-        provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, path: s.path, operation,
-        oursLabel: first.oursLabel, theirsLabel: first.theirsLabel,
-        conflicts: open.map((c) => ({ index: c.index, ours: c.ours, base: c.base, theirs: c.theirs, before: c.before, after: c.after })),
-      });
+      const text = await job.promise;
       const got = parseResolutionReply(text, all.length);
       let added = 0;
       for (const [i, sug] of got) {
@@ -955,7 +960,7 @@ export class DetailView {
       m.ai = { status: `${pluralize(added, 'suggestion')} from ${ai.label}${left ? `, ${left} left for you` : ''}. Read each one before you use it; nothing changes until you do.` };
       if (this.app.donkey) this.app.donkey.react('aiResolve');
     } catch (e) {
-      m.ai = { status: e.message || 'That didn’t work. Try again.', bad: true };
+      m.ai = e.kind === 'AI_CANCELLED' ? { status: 'Stopped. Nothing changed.' } : { status: e.message || 'That didn’t work. Try again.', bad: true };
     }
     if (this.merge === m) this.renderMerge();
   }

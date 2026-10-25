@@ -252,6 +252,11 @@ body.mac .rail-lights { width: 82px; }
   .key { min-width: 40px; margin: 10px 0; }
   .key-badge { top: -7px; }
 }
+/* A key whose action is running: a ring where its icon was, and it can't be pressed. */
+.key.working:disabled { color: var(--legend); }
+.key.working:disabled .legend { color: var(--legend-2); }
+.key-spin { width: 19px; height: 19px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .key-badge {
   position: absolute;
   top: -6px;
@@ -658,6 +663,10 @@ button.gh-eye:hover { color: var(--legend); }
 .plug[draggable='true']:hover { border-color: var(--lane); }
 .plug.patching { opacity: 0.5; }
 .plug-more { flex: none; font-size: 11px; color: var(--legend-3); font-weight: 600; padding: 0 2px; }
+.plug-spin, .sb-spin { width: 10px; height: 10px; flex: none; border: 2px solid var(--lane, var(--jack)); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+.sb-spin { border-color: var(--jack); border-right-color: transparent; }
+.plug.lit .plug-spin { border-color: var(--keycap-ink); border-right-color: transparent; }
+.plug.working { border-style: solid; }
 /* Pull requests: number, with the checks' state as a dot. */
 .pr-tag { display: inline-flex; align-items: center; gap: 3px; flex: none; height: 16px; padding: 0 5px 0 4px; border-radius: 8px; background: var(--panel-3); color: var(--legend-2); font: 600 10.5px var(--font-ui); font-variant-numeric: tabular-nums; }
 .pr-tag .ico { color: var(--violet); }
@@ -1043,6 +1052,8 @@ button.blame-gutter:hover { background: var(--panel-3); color: var(--legend); }
 .ai-warn { display: flex; gap: 6px; align-items: baseline; color: var(--amber); }
 .ai-warn svg { flex: none; transform: translateY(2px); }
 .ai-by { margin-top: 8px; color: var(--legend-3); font-size: 11px; }
+.ai-wait { color: var(--legend-3); font-variant-numeric: tabular-nums; font-weight: 400; }
+.ai-head .ai-wait { margin-left: 2px; }
 .ai-error { margin: 0; color: var(--red); font-size: 12.5px; }
 .ai-loading { display: grid; gap: 8px; }
 .ai-card.loading .skel { background: color-mix(in srgb, var(--violet) 18%, var(--panel-3)); animation: ai-pulse 900ms steps(2, jump-none) infinite; }

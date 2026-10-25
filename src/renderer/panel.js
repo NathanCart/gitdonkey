@@ -98,9 +98,11 @@ export class Panel {
   }
 
   /** While AI writes the message: lock the fields and say so on the key. */
-  setGenerating(on) {
+  setGenerating(on, seconds = 0) {
     this.generating = on;
-    this.aiLabel.textContent = on ? 'Writing…' : 'Generate';
+    // While it writes, the key reads "Stop" and pressing it stops.
+    this.aiLabel.textContent = on ? `Stop · ${seconds}s` : 'Generate';
+    this.aiBtn.title = on ? 'Writing the message. Press to stop.' : this.aiBtn.title;
     this.aiBtn.setAttribute('aria-busy', String(on));
     this.summary.readOnly = on;
     this.desc.readOnly = on;
@@ -523,13 +525,16 @@ export class Panel {
     this.reviewBtn.disabled = st.conflicted.length > 0 || (ai && !st.staged.length);
     this.reviewBtn.title = !ai ? 'Set up AI to review your changes' : !st.staged.length ? 'Stage changes, then have AI look them over for bugs' : `Look over the staged changes for bugs before committing (${ai.label})`;
     const nothing = !st.staged.length && !(amend && this.app.headHash);
-    this.aiBtn.disabled = Boolean(this.generating) || st.conflicted.length > 0 || (ai && nothing);
+    this.aiBtn.disabled = !this.generating && (st.conflicted.length > 0 || Boolean(ai && nothing));
     this.aiBtn.title = !ai
       ? 'Set up AI commit messages'
       : nothing
         ? 'Stage changes, then generate a message from them'
         : `Write the message from the staged changes (${ai.label})`;
-    if (this.generating) this.commitBtn.disabled = true;
+    if (this.generating) {
+      this.commitBtn.disabled = true;
+      this.aiBtn.title = 'Writing the message. Press to stop.';
+    }
   }
 
   // ------------------------------------------------------------ commit / stash details

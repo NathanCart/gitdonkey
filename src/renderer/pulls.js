@@ -236,27 +236,37 @@ export class Pulls {
     let fields = null;
     const first = defaults(commits);
     const aiStatus = h('span', { class: 'ai-status' });
+    let writing = null;
+    const aiLabel = h('span', null, 'Write with AI');
     const aiBtn = h('button', { type: 'button', class: 'btn btn-small ai-key', title: 'Write the title and description from the commits and diff', onClick: async () => {
+      if (writing) {
+        writing.cancel();
+        return;
+      }
       if (!app.aiConfig()) return app.command('ai-settings');
-      aiBtn.disabled = true;
       aiBtn.setAttribute('aria-busy', 'true');
+      aiLabel.textContent = 'Stop · 0s';
       aiStatus.textContent = 'Writing…';
       aiStatus.classList.remove('bad');
       try {
         const base = own && bases.includes(fields.base.value) ? `${remote}/${fields.base.value}` : `${remote}/${defaultBase}`;
-        const r = await app.ai.describePull({ base, head: branch });
+        writing = app.ai.describePull({ base, head: branch }, { onTick: (s) => {
+          aiLabel.textContent = `Stop · ${s}s`;
+        } });
+        const r = await writing.promise;
         fields.title.value = r.title;
         fields.body.value = r.body;
         touched = { title: true, body: true };
         aiStatus.textContent = 'Written by AI. Read it before you open the pull request.';
       } catch (e) {
-        aiStatus.textContent = e.message;
-        aiStatus.classList.add('bad');
+        aiStatus.textContent = e.kind === 'AI_CANCELLED' ? 'Stopped.' : e.message;
+        aiStatus.classList.toggle('bad', e.kind !== 'AI_CANCELLED');
       } finally {
-        aiBtn.disabled = false;
+        writing = null;
+        aiLabel.textContent = 'Write with AI';
         aiBtn.removeAttribute('aria-busy');
       }
-    } }, icon('sparkles', { size: 13 }), 'Write with AI');
+    } }, icon('sparkles', { size: 13 }), aiLabel);
     const v = await formDialog({
       title: `Open a pull request for ${branch}`,
       okLabel: 'Open pull request',

@@ -7,7 +7,7 @@
 // theme while you choose or edit it.
 import { h, icon, clear, led } from './dom.js';
 import { openModal, toast, promptDialog, confirmDialog, menuFromButton } from './ui.js';
-import { invoke } from './api.js';
+import { invoke, aiRequest } from './api.js';
 import { applyTheme } from './theme.js';
 import { aiSettingsDialog } from './dialogs.js';
 import {
@@ -277,9 +277,13 @@ export function themeBuilderDialog(app, { editing = null, base = null } = {}) {
       genLabel.textContent = ai ? 'Generate' : 'Set up AI…';
       genBtn.title = ai ? `Design it with ${ai.label}` : 'Uses the same provider and key as AI commit messages';
     };
-    let busy = false;
+    let busy = null;
     const generate = async () => {
-      if (busy) return;
+      // Pressed again while it's designing: stop.
+      if (busy) {
+        busy.cancel();
+        return;
+      }
       const ai = app.aiConfig();
       if (!ai) {
         await aiSettingsDialog(app);
@@ -292,12 +296,14 @@ export function themeBuilderDialog(app, { editing = null, base = null } = {}) {
         describe.focus();
         return;
       }
-      busy = true;
+      busy = aiRequest('ai:theme', { provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, description }, { onTick: (s) => {
+        genLabel.textContent = `Stop · ${s}s`;
+      } });
       genBtn.setAttribute('aria-busy', 'true');
-      genLabel.textContent = 'Designing…';
+      genLabel.textContent = 'Stop · 0s';
       aiSay(`Asking ${ai.label}…`);
       try {
-        const text = await invoke('ai:theme', { provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, description });
+        const text = await busy.promise;
         const t = sanitizeTheme(text);
         const fixed = improveContrast(t.colors);
         setAll(fixed.colors);
@@ -306,9 +312,10 @@ export function themeBuilderDialog(app, { editing = null, base = null } = {}) {
           ? `Designed by ${ai.label}. GitDonkey adjusted ${fixed.changed.length} colour${fixed.changed.length === 1 ? '' : 's'} so text stays readable.`
           : `Designed by ${ai.label}. Tweak anything below, then save.`);
       } catch (e) {
-        aiSay(e.message || 'That didn’t work. Try again.', true);
+        if (e.kind === 'AI_CANCELLED') aiSay('Stopped.');
+        else aiSay(e.message || 'That didn’t work. Try again.', true);
       } finally {
-        busy = false;
+        busy = null;
         genBtn.removeAttribute('aria-busy');
         syncAi();
       }

@@ -69,6 +69,19 @@ export class Sidebar {
     this.app.patch.bindTargets(this.body, (el) => this.refs.get(el.closest('.sb-item')));
   }
 
+  /** Swap jacks for spinners (and back) on the branches that started or stopped working. */
+  syncWorking() {
+    for (const item of this.body.querySelectorAll('.sb-branch')) {
+      const ref = this.refs.get(item);
+      if (!ref) continue;
+      const working = this.app.isRefWorking(ref);
+      const first = item.firstElementChild;
+      if (!first || working === first.classList.contains('sb-spin')) continue;
+      const color = item.style.getPropertyValue('--jack');
+      first.replaceWith(working ? h('span', { class: 'sb-spin', style: { '--jack': color }, 'aria-hidden': 'true' }) : jack(color, { lit: Boolean(ref.isHead) }));
+    }
+  }
+
   focusFilter() {
     this.filterInput.focus();
     this.filterInput.select();
@@ -274,7 +287,7 @@ export class Sidebar {
       dataset: { patchable: '1' },
       style: { '--jack': color },
       title: `${b.name}${b.upstream ? `\n${syncText(b)}` : ''}\nDouble-click to check out · drag onto another branch to patch`,
-    }, jack(color, { lit: b.isHead }), h('span', { class: 'sb-name' }, leaf), badges);
+    }, this.app.isRefWorking(ref) ? h('span', { class: 'sb-spin', style: { '--jack': color }, 'aria-hidden': 'true' }) : jack(color, { lit: b.isHead }), h('span', { class: 'sb-name' }, leaf), badges);
     this.refs.set(item, ref);
     return item;
   }
@@ -288,7 +301,7 @@ export class Sidebar {
       dataset: { patchable: '1' },
       style: { '--jack': color },
       title: `${b.shortName}\nDouble-click to check out a local tracking branch`,
-    }, jack(color), h('span', { class: 'sb-name' }, leaf), hidden ? h('span', { class: 'gh-eye', title: 'Hidden in the graph' }, icon('eye-off', { size: 12 })) : null);
+    }, this.app.isRefWorking(ref) ? h('span', { class: 'sb-spin', style: { '--jack': color }, 'aria-hidden': 'true' }) : jack(color), h('span', { class: 'sb-name' }, leaf), hidden ? h('span', { class: 'gh-eye', title: 'Hidden in the graph' }, icon('eye-off', { size: 12 })) : null);
     this.refs.set(item, ref);
     return item;
   }
