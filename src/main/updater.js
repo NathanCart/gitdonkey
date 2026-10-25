@@ -38,6 +38,13 @@ const ASSETS = {
   'darwin-x64': 'mac-x64.dmg',
   'win32-x64': 'x64.exe',
   'win32-arm64': 'x64.exe', // runs under Windows' x64 emulation
+  'linux-x64': 'linux-x86_64.AppImage',
+  'linux-arm64': 'linux-arm64.AppImage',
+};
+// Installed from a .deb (not run as an AppImage): the next .deb.
+const DEBS = {
+  'linux-x64': 'linux-amd64.deb',
+  'linux-arm64': 'linux-arm64.deb',
 };
 
 class UpdateError extends Error {
@@ -77,10 +84,10 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function assetFor(assets, platform, arch) {
-  const suffix = ASSETS[`${platform}-${arch}`];
+function assetFor(assets, platform, arch, { deb = false } = {}) {
+  const suffix = (deb ? DEBS : ASSETS)[`${platform}-${arch}`];
   if (!suffix) return null;
-  return (assets || []).find((a) => a.name.toLowerCase().endsWith(suffix)) || null;
+  return (assets || []).find((a) => a.name.toLowerCase().endsWith(suffix.toLowerCase())) || null;
 }
 
 /** Release notes Markdown as plain blocks for the notice: headings, list items, paragraphs. */
@@ -259,9 +266,25 @@ async function replaceBundle({ dmg, bundle, version, verified = false }) {
 }
 
 /** Reopen `bundle` once this process has exited (giving up the wait after a minute). */
-function relaunchAfterExit(bundle, pid = process.pid) {
-  const script = 'i=0; while kill -0 "$0" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.2; i=$((i+1)); done; exec open "$1"';
-  spawn('/bin/sh', ['-c', script, String(pid), bundle], { detached: true, stdio: 'ignore' }).unref();
+function relaunchAfterExit(target, pid = process.pid, { open = true } = {}) {
+  const script = `i=0; while kill -0 "$0" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.2; i=$((i+1)); done; exec ${open ? 'open ' : ''}"$1"`;
+  spawn('/bin/sh', ['-c', script, String(pid), target], { detached: true, stdio: 'ignore' }).unref();
+}
+
+// ---------------------------------------------------------------- Linux AppImage swap
+
+/** Put the new AppImage where the running one is. The running one keeps working until it quits. */
+async function replaceAppImage(file, target) {
+  const dir = path.dirname(target);
+  try {
+    await fs.promises.access(dir, fs.constants.W_OK);
+  } catch {
+    throw new UpdateError(`GitDonkey can’t write to ${dir}.`, 'UPDATE_INSTALL');
+  }
+  const next = `${target}.updating`;
+  await fs.promises.copyFile(file, next);
+  await fs.promises.chmod(next, 0o755);
+  await fs.promises.rename(next, target);
 }
 
 // ---------------------------------------------------------------- the updater
@@ -278,7 +301,7 @@ class Updater extends EventEmitter {
    * @param {(file: string) => Promise<string>} o.openPath shell.openPath
    * @param {() => void} o.quit
    */
-  constructor({ fetch, store, dir, version, platform = process.platform, arch = process.arch, feedUrl = FEED_URL, offline = false, bundle = null, packaged = false, firstCheck = FIRST_CHECK, openPath, quit }) {
+  constructor({ fetch, store, dir, version, platform = process.platform, arch = process.arch, feedUrl = FEED_URL, offline = false, bundle = null, appImage = null, deb = false, packaged = false, firstCheck = FIRST_CHECK, openPath, quit }) {
     super();
     this.fetchImpl = fetch;
     this.store = store;
@@ -289,6 +312,8 @@ class Updater extends EventEmitter {
     this.feedUrl = feedUrl;
     this.offline = offline;
     this.bundle = bundle;
+    this.appImage = appImage;
+    this.deb = deb;
     this.packaged = packaged;
     this.firstCheck = firstCheck;
     this.openPath = openPath;
@@ -321,6 +346,7 @@ class Updater extends EventEmitter {
     if (!this.asset) return 'page';
     if (this.platform === 'darwin') return this.bundle ? 'replace' : 'open';
     if (this.platform === 'win32') return this.packaged ? 'installer' : 'open';
+    if (this.platform === 'linux') return this.appImage ? 'appimage' : 'open';
     return 'open';
   }
 
@@ -359,7 +385,7 @@ class Updater extends EventEmitter {
 
   /** Remove old downloads and anything a swap that was cut short left behind. */
   async cleanup() {
-    const keep = this.downloadPath(assetFor((this.saved().release || {}).assets, this.platform, this.arch));
+    const keep = this.downloadPath(assetFor((this.saved().release || {}).assets, this.platform, this.arch, { deb: this.deb }));
     for (const f of await fsp.readdir(this.dir).catch(() => [])) {
       const p = path.join(this.dir, f);
       if (p !== keep) await fsp.rm(p, { recursive: true, force: true }).catch(() => {});
@@ -385,7 +411,7 @@ class Updater extends EventEmitter {
           if (!BUSY.has(this.status)) {
             const newer = Boolean(release) && compareVersions(release.version, this.version) > 0;
             this.release = newer ? release : null;
-            this.asset = newer ? assetFor(release.assets, this.platform, this.arch) : null;
+            this.asset = newer ? assetFor(release.assets, this.platform, this.arch, { deb: this.deb }) : null;
             this.status = newer ? 'available' : 'current';
             this.error = null;
           }
@@ -544,6 +570,11 @@ class Updater extends EventEmitter {
           this.quit();
           return { done: 'restarting' };
         }
+      } else if (kind === 'appimage') {
+        await replaceAppImage(this.file, this.appImage);
+        relaunchAfterExit(this.appImage, process.pid, { open: false });
+        this.quit();
+        return { done: 'restarting' };
       } else if (kind === 'installer') {
         await runDetached(this.file, ['/S', '--updated', '--force-run']);
         this.quit();
@@ -579,4 +610,5 @@ module.exports = {
   swapBundle,
   replaceBundle,
   bundleInfo,
+  replaceAppImage,
 };

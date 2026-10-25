@@ -4,7 +4,7 @@ import { h, icon, clear, led, logoMark } from './dom.js';
 import { toast, confirmDialog, choiceDialog, promptDialog, formDialog, contextMenu, menuFromButton, closeMenus, hasOpenModal } from './ui.js';
 import { computeGraph } from './lib/graph-layout.js';
 import { shortHash, debounce, pluralize, splitPath } from './lib/util.js';
-import { GraphView } from './graph-view.js';
+import { GraphView, syncText } from './graph-view.js';
 import { Sidebar } from './sidebar.js';
 import { Panel } from './panel.js';
 import { DetailView } from './detail-view.js';
@@ -18,6 +18,9 @@ import { applyTheme } from './theme.js';
 import { themesDialog } from './themes-ui.js';
 import { findTheme, DEFAULT_THEME } from './lib/themes.js';
 import { Donkey } from './donkey.js';
+import { Pulls } from './pulls.js';
+import { openPalette } from './palette.js';
+import { AiTools } from './ai-tools.js';
 
 const PAGE = 1500;
 const DEFAULT_SETTINGS = {
@@ -37,7 +40,7 @@ function makeTab(root, name) {
   };
 }
 
-const basename = (p) => p.replace(/\/+$/, '').split('/').pop();
+const basename = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const firstLine = (s) => String(s || '').split('\n')[0];
 
 function refsSignature(refs) {
@@ -96,6 +99,8 @@ class App {
     this.patch = new PatchBay(this);
     this.updates = new Updates(this);
     this.donkey = new Donkey(this);
+    this.pulls = new Pulls(this);
+    this.ai = new AiTools(this);
   }
 
   get tab() {
@@ -358,12 +363,12 @@ class App {
       this.detail.close();
       renderToolbar(this.els.toolbar, this);
       this.renderStatus();
-      invoke('window:setTitle', 'GitDonkey');
+      this.setTitle('GitDonkey');
       await renderWelcome(this.els.welcome, this);
       return;
     }
     document.body.classList.remove('show-welcome');
-    invoke('window:setTitle', `${tab.name} — GitDonkey`);
+    this.setTitle(`${tab.name} — GitDonkey`);
     this.panel.loadDraft();
     this.detail.close();
     if (tab.data) {
@@ -379,6 +384,11 @@ class App {
       if (sel.type === 'commit') this.loadDetails(sel.hash);
       else if (sel.type === 'stash') this.loadDetails(sel.stash.hash, { stash: true });
     }
+  }
+
+  setTitle(title) {
+    document.title = title;
+    invoke('window:setTitle', title);
   }
 
   // ------------------------------------------------------------ repository open
@@ -455,18 +465,24 @@ class App {
   async doRefresh(tab) {
     const root = tab.root;
     try {
-      const [status, refs, stashes, remotes, opState] = await Promise.all([
-        git(root, 'status'), git(root, 'refs'), git(root, 'stashes'), git(root, 'remotes'), git(root, 'opState'),
+      const [status, refs, stashes, remotes, opState, worktrees, submodules] = await Promise.all([
+        git(root, 'status'), git(root, 'refs'), git(root, 'stashes'), git(root, 'remotes'), git(root, 'opState'), git(root, 'worktrees').catch(() => []),
+        git(root, 'submodules').catch(() => []),
       ]);
       const sig = refsSignature(refs);
+      // Whether it uses Git LFS: read again when commits or branches change (or .gitattributes is edited).
+      const attrs = status.unstaged.concat(status.staged).some((f) => f.path === '.gitattributes');
+      if (!tab.lfs || tab.lfs.sig !== sig || attrs) tab.lfs = { ...(await git(root, 'lfsInfo').catch(() => ({ used: false, installed: false, patterns: [] }))), sig };
+      const logOpts = this.logOptions(tab);
+      const fsig = JSON.stringify(logOpts);
       let commits = tab.data ? tab.data.commits : null;
       let hasMore = tab.data ? tab.data.hasMore : false;
-      if (!tab.data || tab.data.sig !== sig || !commits) {
-        const want = Math.max(PAGE, tab.data ? tab.data.commits.length : 0);
-        commits = await git(root, 'log', { max: want });
+      if (!tab.data || tab.data.sig !== sig || tab.data.fsig !== fsig || !commits) {
+        const want = Math.max(PAGE, tab.data && tab.data.fsig === fsig ? tab.data.commits.length : 0);
+        commits = await git(root, 'log', { max: want, ...logOpts });
         hasMore = commits.length >= want;
       }
-      tab.data = { sig, status, refs, stashes, remotes, opState, commits, hasMore };
+      tab.data = { sig, fsig, status, refs, stashes, remotes, opState, commits, hasMore, worktrees, submodules };
       tab.error = null;
     } catch (e) {
       tab.error = e.message;
@@ -511,6 +527,30 @@ class App {
     this.renderAll({ skipDetail: reopened });
     if (restoreScroll) this.graph.scroller.scrollTop = tab.ui.scrollTop || 0;
     if (this.search && this.search.query) this.runSearch(this.search.query, { keepIndex: true });
+    this.pulls.load(tab);
+    this.loadSigning(tab);
+  }
+
+  /** Whether commits here get signed (for the lock by the commit button). Read once per tab. */
+  async loadSigning(tab) {
+    if (tab.signingRead) return;
+    tab.signingRead = true;
+    const cfg = await git(tab.root, 'signingConfig').catch(() => null);
+    tab.signing = cfg;
+    if (tab === this.tab) this.panel.updateCommitButton();
+  }
+
+  get signing() {
+    return this.tab ? this.tab.signing || null : null;
+  }
+
+  set signing(cfg) {
+    // Global settings apply to every open repository: read them again.
+    for (const t of this.tabs) t.signingRead = false;
+    if (this.tab) {
+      this.tab.signing = cfg;
+      this.tab.signingRead = true;
+    }
   }
 
   buildGraph() {
@@ -521,7 +561,215 @@ class App {
     this.rows = rows;
     this.layoutData = computeGraph(rows);
     this.indexByHash = new Map(rows.map((c, i) => [c.hash, i]));
-    this.refsByHash = buildRefsByHash(d.refs);
+    this.refsByHash = this.filterRefs(buildRefsByHash(d.refs));
+    this.pulls.annotate(this.refsByHash);
+    // Branches checked out in another worktree of this repository.
+    const elsewhere = new Map((d.worktrees || []).filter((w) => w.branch && !w.current).map((w) => [w.branch, w]));
+    if (elsewhere.size) for (const list of this.refsByHash.values()) for (const ref of list) if (ref.type === 'local') ref.worktree = elsewhere.get(ref.name) || null;
+  }
+
+  // ------------------------------------------------------------ graph filter
+
+  /** Which branches this repository's graph shows, and whose commits stand out. */
+  graphFilter(tab = this.tab) {
+    const saved = tab && tab.root ? (this.settings.graphFilters || {})[tab.root] : null;
+    return { only: null, hidden: [], remotes: true, tags: true, author: '', ...(saved || {}) };
+  }
+
+  isFiltered(f = this.graphFilter()) {
+    return Boolean((f.only && f.only.length) || f.hidden.length || !f.remotes || !f.tags || f.author);
+  }
+
+  logOptions(tab) {
+    const f = this.graphFilter(tab);
+    return { only: f.only && f.only.length ? f.only : null, hidden: f.hidden, remotes: f.remotes, tags: f.tags };
+  }
+
+  setGraphFilter(patch) {
+    const tab = this.tab;
+    if (!tab || !tab.root) return;
+    const next = { ...this.graphFilter(), ...patch };
+    const all = { ...(this.settings.graphFilters || {}) };
+    if (this.isFiltered(next)) all[tab.root] = next;
+    else delete all[tab.root];
+    this.setSetting('graphFilters', all, { silent: true });
+    this.refresh();
+  }
+
+  /**
+   * Leave hidden branches' plugs off the graph. Showing only some branches
+   * keeps every plug on the commits shown: where origin/x or a tag sits on
+   * them is worth seeing.
+   */
+  filterRefs(map) {
+    const f = this.graphFilter();
+    if (!this.isFiltered(f) || (f.only && f.only.length)) return map;
+    const hidden = new Set(f.hidden);
+    const keep = (r) => {
+      if (r.type === 'head') return true;
+      if (r.type === 'tag') return f.tags;
+      const full = r.type === 'local' ? `refs/heads/${r.name}` : `refs/remotes/${r.name}`;
+      if (hidden.has(full)) return false;
+      return r.type !== 'remote' || f.remotes;
+    };
+    for (const [hash, list] of map) {
+      const kept = list.filter(keep);
+      if (kept.length) map.set(hash, kept);
+      else map.delete(hash);
+    }
+    return map;
+  }
+
+  /** Is this branch (a full refname) left out of the graph? With `hash`, not if its tip is shown anyway. */
+  hiddenInGraph(full, hash = null) {
+    const f = this.graphFilter();
+    if (f.only && f.only.length) return !f.only.includes(full) && !(hash && this.indexByHash.has(hash));
+    return f.hidden.includes(full) || (!f.remotes && full.startsWith('refs/remotes/'));
+  }
+
+  toggleHidden(full) {
+    const f = this.graphFilter();
+    if (f.only && f.only.length) {
+      const only = f.only.includes(full) ? f.only.filter((x) => x !== full) : [...f.only, full];
+      this.setGraphFilter({ only: only.length ? only : null });
+    } else this.setGraphFilter({ hidden: f.hidden.includes(full) ? f.hidden.filter((x) => x !== full) : [...f.hidden, full] });
+  }
+
+  /** The filter's words, for the bar over the graph. */
+  filterSummary(f = this.graphFilter()) {
+    const short = (r) => r.replace(/^refs\/(heads|remotes)\//, '');
+    const list = (xs) => (xs.length > 3 ? `${xs.slice(0, 3).map(short).join(', ')} and ${xs.length - 3} more` : xs.map(short).join(', '));
+    return [
+      f.only && f.only.length ? `Only ${list(f.only)}` : null,
+      !f.only && f.hidden.length ? `Hiding ${list(f.hidden)}` : null,
+      !f.only && !f.remotes ? 'No remote branches' : null,
+      !f.only && !f.tags ? 'No tags' : null,
+      f.author ? `Highlighting ${f.author}` : null,
+    ].filter(Boolean);
+  }
+
+  async pickBranches(mode) {
+    const f = this.graphFilter();
+    const picked = await dialogs.branchPickerDialog(this, {
+      title: mode === 'only' ? 'Show only these branches' : 'Hide these branches',
+      okLabel: mode === 'only' ? 'Show only these' : 'Hide them',
+      selected: mode === 'only' ? f.only || (this.currentBranch ? [`refs/heads/${this.currentBranch}`] : []) : f.hidden,
+    });
+    if (!picked) return;
+    if (mode === 'only') this.setGraphFilter({ only: picked.length ? picked : null, hidden: [] });
+    else this.setGraphFilter({ hidden: picked, only: null });
+  }
+
+  graphFilterMenu(anchor) {
+    const f = this.graphFilter();
+    const cur = this.currentBranch;
+    const onlyCurrent = cur && f.only && f.only.length === 1 && f.only[0] === `refs/heads/${cur}`;
+    const counts = new Map();
+    for (const c of this.data.commits) counts.set(c.author, (counts.get(c.author) || 0) + 1);
+    const authors = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+    menuFromButton(anchor, [
+      { header: 'Show in the graph' },
+      { label: 'Every branch', checked: !f.only && !f.hidden.length, run: () => this.setGraphFilter({ only: null, hidden: [] }) },
+      cur ? { label: `Only ${cur}`, checked: onlyCurrent, run: () => this.setGraphFilter({ only: [`refs/heads/${cur}`], hidden: [] }) } : null,
+      { label: 'Only the branches I pick…', checked: Boolean(f.only && f.only.length && !onlyCurrent), run: () => this.pickBranches('only') },
+      { label: f.hidden.length ? `Hiding ${pluralize(f.hidden.length, 'branch', 'branches')}…` : 'Hide some branches…', checked: f.hidden.length > 0, run: () => this.pickBranches('hide') },
+      '-',
+      { label: 'Remote branches', checked: f.remotes, disabled: Boolean(f.only), run: () => this.setGraphFilter({ remotes: !f.remotes }) },
+      { label: 'Tags', checked: f.tags, disabled: Boolean(f.only), run: () => this.setGraphFilter({ tags: !f.tags }) },
+      '-',
+      {
+        label: f.author ? `Highlighting ${f.author}` : 'Highlight one author',
+        icon: 'user',
+        submenu: [
+          { label: 'Nobody', checked: !f.author, run: () => this.setGraphFilter({ author: '' }) },
+          '-',
+          ...authors.map(([name, n]) => ({ label: `${name} · ${n}`, checked: f.author === name, run: () => this.setGraphFilter({ author: name }) })),
+        ],
+      },
+      this.isFiltered(f) ? '-' : null,
+      this.isFiltered(f) ? { label: 'Show everything', icon: 'funnel-x', run: () => this.clearGraphFilter() } : null,
+    ]);
+  }
+
+  clearGraphFilter() {
+    this.setGraphFilter({ only: null, hidden: [], remotes: true, tags: true, author: '' });
+  }
+
+  // ------------------------------------------------------------ submodules & LFS
+
+  async updateSubmodules(paths = null) {
+    const off = this.progressHandler();
+    try {
+      await this.run(paths && paths.length === 1 ? `Update ${paths[0]}` : 'Update submodules', () => git(this.repo, 'updateSubmodules', { paths }), { success: paths && paths.length === 1 ? `${paths[0]} is at the recorded commit` : 'Submodules updated' });
+    } finally {
+      off();
+    }
+  }
+
+  submoduleMenu(s, x, y) {
+    contextMenu(x, y, [
+      { header: s.path },
+      { label: 'Open in a new tab', icon: 'folder-git-2', disabled: s.state === 'missing', run: () => this.openRepo(s.root) },
+      { label: s.state === 'missing' ? 'Set it up' : 'Check out the recorded commit', icon: 'download', disabled: s.state === 'ok', run: () => this.updateSubmodules([s.path]) },
+      '-',
+      { label: revealLabel, icon: 'folder-open', disabled: s.state === 'missing', run: () => invoke('shell:showItem', s.root) },
+      { label: 'Copy path', icon: 'copy', run: () => this.copy(s.path, 'Path copied') },
+      s.url ? { label: 'Copy URL', icon: 'copy', run: () => this.copy(s.url, 'URL copied') } : null,
+    ]);
+  }
+
+  async lfsTrack(pattern) {
+    await this.run(`Track ${pattern} with Git LFS`, () => git(this.repo, 'lfsTrack', pattern), { success: `${pattern} goes to Git LFS from now on. Commit .gitattributes too.` });
+    if (this.tab) this.tab.lfs = null;
+  }
+
+  /** The other worktree a branch is checked out in, if any. */
+  worktreeOf(branch) {
+    return ((this.data && this.data.worktrees) || []).find((w) => w.branch === branch && !w.current) || null;
+  }
+
+  async newWorktree(opts = {}) {
+    const v = await dialogs.worktreeDialog(this, opts);
+    if (!v) return null;
+    const repo = this.repo;
+    const r = await this.run(`New worktree for ${v.branch}`, () => git(repo, 'addWorktree', v.folder, v.existing ? { branch: v.branch } : { newBranch: v.branch, start: v.start }), { success: `${v.branch} checked out in ${v.folder.split(/[\\/]/).pop()}` });
+    if (r && v.open) await this.openRepo(v.folder);
+    return r;
+  }
+
+  async removeWorktree(w) {
+    const ok = await confirmDialog({ title: `Remove the worktree ${basename(w.path)}?`, message: `Delete the folder ${w.path} and stop tracking it as a worktree.${w.branch ? ` The branch ${w.branch} stays.` : ''}`, okLabel: 'Remove worktree', danger: true });
+    if (!ok) return;
+    const repo = this.repo;
+    const tab = this.tabs.find((t) => t.root === w.path);
+    try {
+      await git(repo, 'removeWorktree', w.path);
+    } catch (e) {
+      if (!/modified or untracked files|is dirty|contains modified/i.test(e.message)) {
+        this.handleError('Remove worktree', e);
+        return;
+      }
+      const force = await confirmDialog({ title: 'It has uncommitted changes', message: `${basename(w.path)} has changes that aren’t committed. Remove it anyway? Those changes are lost.`, okLabel: 'Remove anyway', danger: true });
+      if (!force) return;
+      const r = await this.run('Remove worktree', () => git(repo, 'removeWorktree', w.path, { force: true }));
+      if (!r) return;
+    }
+    if (tab) await this.closeTab(tab.id);
+    toast({ type: 'success', title: `Removed ${basename(w.path)}` });
+    await this.refresh();
+  }
+
+  worktreeMenu(w, x, y) {
+    contextMenu(x, y, [
+      { header: basename(w.path) },
+      w.current ? { label: 'This tab', disabled: true } : { label: 'Open in a new tab', icon: 'folder-git-2', disabled: !w.exists, run: () => this.openRepo(w.path) },
+      { label: revealLabel, icon: 'folder-open', disabled: !w.exists, run: () => invoke('shell:showItem', w.path) },
+      { label: 'Open in Terminal', icon: 'terminal', disabled: !w.exists, run: () => invoke('shell:openTerminal', w.path) },
+      { label: 'Copy path', icon: 'copy', run: () => this.copy(w.path, 'Path copied') },
+      '-',
+      w.prunable ? { label: 'Forget missing worktrees', icon: 'trash-2', run: () => this.run('Prune worktrees', () => git(this.repo, 'pruneWorktrees'), { success: 'Forgot missing worktrees' }) } : null,
+      !w.main && !w.current && !w.prunable ? { label: 'Remove worktree…', icon: 'trash-2', danger: true, run: () => this.removeWorktree(w) } : null,
+    ]);
   }
 
   /** Conflicts appearing, or a pile of changes, are worth a word from the donkey (once each). */
@@ -554,13 +802,16 @@ class App {
     this.sidebar.render();
     const st = d.status;
     const opLabels = { merge: 'Merging', rebase: 'Rebasing', 'cherry-pick': 'Cherry-picking', revert: 'Reverting', am: 'Applying patches' };
+    const filter = this.graphFilter();
+    const author = filter.author;
+    this.graph.setFilter(this.isFiltered(filter) ? this.filterSummary(filter) : null, author ? (c) => c.author !== author : null);
     this.graph.setData({
       rows: this.rows,
       layout: this.layoutData,
       refsByHash: this.refsByHash,
       selectedIndex: this.selectedIndex(),
       wip: { staged: st.staged.length, unstaged: st.unstaged.length, conflicted: st.conflicted.length, opLabel: d.opState ? `${opLabels[d.opState.type] || d.opState.type}…` : null },
-      emptyText: d.refs.head.unborn ? 'No commits yet' : 'No commits',
+      emptyText: d.refs.head.unborn ? 'No commits yet' : this.isFiltered(filter) ? 'No commits on the branches shown' : 'No commits',
     });
     this.panel.render();
     this.renderStatus();
@@ -610,7 +861,7 @@ class App {
     if (!tab || !tab.data || !tab.data.hasMore || this.loadingMore) return;
     this.loadingMore = true;
     try {
-      const more = await git(tab.root, 'log', { skip: tab.data.commits.length, max: PAGE });
+      const more = await git(tab.root, 'log', { skip: tab.data.commits.length, max: PAGE, ...this.logOptions(tab) });
       if (tab !== this.tab) return;
       const seen = new Set(tab.data.commits.map((c) => c.hash));
       tab.data.commits = tab.data.commits.concat(more.filter((c) => !seen.has(c.hash)));
@@ -629,7 +880,7 @@ class App {
     if (!tab.data.hasMore) return;
     this.beginBusy('Loading full history');
     try {
-      tab.data.commits = await git(tab.root, 'log', { max: 1000000 });
+      tab.data.commits = await git(tab.root, 'log', { max: 1000000, ...this.logOptions(tab) });
       tab.data.hasMore = false;
       this.buildGraph();
       this.renderAll({ skipDetail: true });
@@ -723,6 +974,7 @@ class App {
 
   revealRef(ref) {
     if (ref.type === 'stash') return this.selectStash(ref.stash);
+    if (ref.type === 'pr') return this.pulls.reveal(ref.pr);
     if (ref.type === 'remote-root') return undefined;
     const hash = ref.type === 'local' ? ref.branch.hash : ref.type === 'remote' ? ref.remoteRef.hash : ref.type === 'tag' ? ref.tag.hash : this.headHash;
     return this.selectCommit(hash, { scroll: true });
@@ -785,7 +1037,7 @@ class App {
     const right = h('div', { class: 'st-right' }, this.updates.statusKey());
     if (d && this.tab && this.tab.root) {
       const b = d.refs.local.find((x) => x.isHead);
-      if (b && b.upstream) right.appendChild(h('span', { class: 'st-up', title: b.ahead || b.behind ? 'Out of sync with upstream' : 'In sync with upstream' }, led(b.ahead || b.behind ? 'amber' : 'green'), `${b.name} → ${b.upstream}`, b.ahead ? h('span', { class: 'ab ahead' }, `↑${b.ahead}`) : null, b.behind ? h('span', { class: 'ab behind' }, `↓${b.behind}`) : null));
+      if (b && b.upstream) right.appendChild(h('span', { class: 'st-up', title: syncText(b) }, led(b.ahead && b.behind ? 'amber' : b.ahead || b.behind ? 'cyan' : 'green'), `${b.name} → ${b.upstream}`, b.ahead ? h('span', { class: 'ab ahead' }, `↑${b.ahead}`) : null, b.behind ? h('span', { class: 'ab behind' }, `↓${b.behind}`) : null));
       right.appendChild(h('span', { class: 'st-count' }, `${d.commits.length.toLocaleString()}${d.hasMore ? '+' : ''} commits`));
     }
     el.append(left, mid, right);
@@ -859,6 +1111,29 @@ class App {
       this.conflictsInTheWay(label, e.message);
       return;
     }
+    if (kind === 'SIGNING') {
+      toast({
+        type: 'error',
+        title: `${label}: couldn’t sign it`,
+        message: 'Git couldn’t sign the commit with your key. Check the key in signing settings, or that your SSH agent / GPG agent is running.',
+        detail: e.message,
+        actions: [
+          { label: 'Signing settings…', run: () => dialogs.signingDialog(this) },
+          /commit/i.test(label) ? { label: 'Commit unsigned', run: () => this.commitFromPanel(this.panel.message(), this.panel.amendBox.checked, { noSign: true }) } : null,
+        ].filter(Boolean),
+      });
+      return;
+    }
+    if (kind === 'WORKTREE_BUSY') {
+      const where = (e.message.match(/at '([^']+)'/) || [])[1];
+      toast({
+        type: 'warn',
+        title: `${label}: checked out in another worktree`,
+        message: where ? `A branch can only be checked out in one worktree at a time. This one is in ${where}.` : e.message,
+        actions: where ? [{ label: 'Open that worktree', primary: true, run: () => this.openRepo(where) }] : [],
+      });
+      return;
+    }
     if (kind === 'DIRTY_WORKTREE') {
       toast({
         type: 'error',
@@ -873,10 +1148,56 @@ class App {
 
   pushUndo(entry) {
     const tab = this.tab;
-    tab.ui.undo.push({ ...entry, repo: tab.root });
+    entry.repo = tab.root;
+    tab.ui.undo.push(entry);
     if (tab.ui.undo.length > 50) tab.ui.undo.shift();
     tab.ui.redo = [];
     renderToolbar(this.els.toolbar, this);
+  }
+
+  /** Undo one particular entry (from a toast's Undo), wherever it is on the stack. */
+  async undoEntry(entry) {
+    const tab = this.tab;
+    if (!tab) return;
+    const i = tab.ui.undo.indexOf(entry);
+    if (i === -1) return;
+    if (i === tab.ui.undo.length - 1) return this.undo();
+    tab.ui.undo.splice(i, 1);
+    const ok = await this.run(`Undo ${entry.label}`, entry.undo, { success: `Undid: ${entry.label}` });
+    if (ok) tab.ui.redo.push(entry);
+    renderToolbar(this.els.toolbar, this);
+  }
+
+  /**
+   * Throw work away safely: save a snapshot of it first, do it, and make it
+   * undoable. Without a snapshot it asks before going ahead.
+   */
+  async destroy(label, { paths = null, kind = 'discard', run, redo }) {
+    const repo = this.repo;
+    let snap = null;
+    try {
+      snap = await git(repo, 'snapshot', label, { paths, kind });
+    } catch (e) {
+      const ok = await confirmDialog({
+        title: 'Couldn’t keep a copy first',
+        message: `GitDonkey couldn’t save your changes before throwing them away (${e.message}). ${label} anyway? This can’t be undone.`,
+        okLabel: label,
+        danger: true,
+      });
+      if (!ok) return null;
+    }
+    const r = await this.run(label, run);
+    if (!r || !snap) return r;
+    const entry = { label: label.toLowerCase(), undo: () => git(repo, 'restoreSnapshot', snap.hash), redo };
+    this.pushUndo(entry);
+    toast({
+      type: 'success',
+      title: label === 'Discard all changes' ? 'Changes discarded' : `${label}: done`,
+      message: `GitDonkey kept a copy of ${pluralize(snap.files, 'file')}. Undo puts ${snap.files === 1 ? 'it' : 'them'} back${snap.skipped && snap.skipped.length ? ` (except ${pluralize(snap.skipped.length, 'very large file')})` : ''}.`,
+      actions: [{ label: 'Undo', primary: true, run: () => this.undoEntry(entry) }, { label: 'Recover lost work…', run: () => dialogs.recoverDialog(this) }],
+      timeout: 9000,
+    });
+    return r;
   }
 
   async undo() {
@@ -905,6 +1226,17 @@ class App {
   restoreHeadFn(prev) {
     const repo = this.repo;
     return () => git(repo, prev.detached ? 'checkoutDetached' : 'checkout', prev.ref);
+  }
+
+  /** Git on the open repository. */
+  gitCall(method, ...args) {
+    return git(this.repo, method, ...args);
+  }
+
+  /** Select the tip of the branch `b` tracks in the graph. */
+  revealUpstream(b) {
+    const up = this.data.refs.remote.find((r) => r.shortName === b.upstream);
+    if (up) this.selectCommit(up.hash, { scroll: true });
   }
 
   async copy(text, message = 'Copied') {
@@ -941,24 +1273,28 @@ class App {
     if (this.settings.confirmDiscard !== false) {
       const ok = await confirmDialog({
         title: 'Discard changes',
-        message: files.length === 1 ? `Discard your changes to ${files[0].path}? This cannot be undone.` : `Discard changes to ${files.length} files? This cannot be undone.`,
+        message: files.length === 1 ? `Discard your changes to ${files[0].path}? GitDonkey keeps a copy, so you can undo this.` : `Discard changes to ${files.length} files? GitDonkey keeps a copy, so you can undo this.`,
         okLabel: 'Discard',
         danger: true,
       });
       if (!ok) return;
     }
-    await this.run('Discard changes', () => git(this.repo, 'discard', files.map((f) => ({ path: f.path, untracked: Boolean(f.untracked || f.status === '?') }))));
+    const repo = this.repo;
+    const list = files.map((f) => ({ path: f.path, untracked: Boolean(f.untracked || f.status === '?') }));
+    await this.destroy('Discard changes', { paths: files.map((f) => f.path), run: () => git(repo, 'discard', list), redo: () => git(repo, 'discard', list) });
   }
 
   async discardStaged(files) {
     const ok = await confirmDialog({
       title: 'Discard changes',
-      message: `Throw away all staged and unstaged changes to ${files.length === 1 ? files[0].path : `${files.length} files`}? This cannot be undone.`,
+      message: `Throw away all staged and unstaged changes to ${files.length === 1 ? files[0].path : `${files.length} files`}? GitDonkey keeps a copy, so you can undo this.`,
       okLabel: 'Discard',
       danger: true,
     });
     if (!ok) return;
-    await this.run('Discard changes', () => git(this.repo, 'discardFull', files.map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status }))));
+    const repo = this.repo;
+    const list = files.map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status }));
+    await this.destroy('Discard changes', { paths: files.flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path])), run: () => git(repo, 'discardFull', list), redo: () => git(repo, 'discardFull', list) });
   }
 
   async discardAll() {
@@ -968,12 +1304,18 @@ class App {
     if (!n) return;
     const ok = await confirmDialog({
       title: 'Discard all changes',
-      message: `Reset the working tree and index to ${this.currentBranch || 'HEAD'} and delete untracked files? ${pluralize(n, 'change')} will be lost. This cannot be undone.`,
+      message: `Reset the working tree and index to ${this.currentBranch || 'HEAD'} and delete untracked files? GitDonkey keeps a copy of all ${pluralize(n, 'change')} first, so you can undo this.`,
       okLabel: 'Discard everything',
       danger: true,
     });
     if (!ok) return;
-    await this.run('Discard all changes', () => git(this.repo, 'discardAll'));
+    const repo = this.repo;
+    await this.destroy('Discard all changes', { kind: 'discard-all', run: () => git(repo, 'discardAll'), redo: () => git(repo, 'discardAll') });
+  }
+
+  /** Put a snapshot (or a lost stash) back into the working tree. */
+  async restoreSnapshot(hash, label) {
+    return this.run(`Restore ${label || 'snapshot'}`, () => git(this.repo, 'restoreSnapshot', hash), { success: (r) => (r && r.conflicts ? null : 'Changes restored'), autoStash: true });
   }
 
   async ignore(pattern) {
@@ -1037,7 +1379,7 @@ class App {
     }
   }
 
-  async commitFromPanel(message, amend) {
+  async commitFromPanel(message, amend, { noSign = false } = {}) {
     const d = this.data;
     const op = d.opState;
     if (op && op.type === 'rebase') return this.continueOp(message);
@@ -1050,7 +1392,7 @@ class App {
         await git(repo, 'continueOperation', 'merge', { message });
         return git(repo, 'revParse', 'HEAD');
       }
-      return git(repo, 'commit', { message, amend });
+      return git(repo, 'commit', { message, amend, noSign });
     });
     if (!r) return;
     this.tab.ui.amendFilled = null;
@@ -1074,6 +1416,8 @@ class App {
 
   async checkoutRef(ref) {
     if (!ref) return null;
+    if (ref.type === 'worktree') return ref.worktree.current ? null : this.openRepo(ref.worktree.path);
+    if (ref.type === 'local' && ref.worktree) return this.openRepo(ref.worktree.path);
     if (ref.type === 'local') return ref.isHead ? null : this.checkoutBranch(ref.name);
     if (ref.type === 'remote') {
       const local = this.data.refs.local.find((b) => b.name === ref.branchName);
@@ -1207,8 +1551,22 @@ class App {
     await this.run('Set upstream', () => git(this.repo, 'setUpstream', name, v.up || null), { success: v.up ? `${name} now tracks ${v.up}` : `${name} no longer tracks a remote branch` });
   }
 
-  merge(ref) {
+  async merge(ref) {
     const cur = this.currentBranch || 'HEAD';
+    const b = this.data.refs.local.find((x) => x.isHead);
+    // Merging into a branch that's behind what it tracks leaves those commits out, and splits it further.
+    if (b && b.upstream && b.behind && !b.gone && ref.name !== b.upstream) {
+      const choice = await choiceDialog({
+        title: `${cur} is behind ${b.upstream}`,
+        message: `${b.upstream} has ${pluralize(b.behind, 'commit')} ${cur} doesn’t. Pull them in first, so the merge includes them and ${cur} doesn’t split from ${b.upstream}?`,
+        choices: [{ id: 'anyway', label: 'Merge anyway' }, { id: 'pull', label: 'Pull, then merge' }],
+      });
+      if (!choice) return null;
+      if (choice === 'pull') {
+        const r = await this.pull();
+        if (!r || r.conflicts) return r;
+      }
+    }
     return this.run(`Merge ${ref.name} into ${cur}`, () => git(this.repo, 'merge', this.refName(ref)), {
       success: (r) => (/Already up to date/i.test(r.output || '') ? 'Already up to date' : `Merged ${ref.name} into ${cur}`),
     });
@@ -1277,19 +1635,33 @@ class App {
 
   async reset(hash, mode) {
     const cur = this.currentBranch || 'HEAD';
+    const repo = this.repo;
+    let snap = null;
     if (mode === 'hard') {
       const ok = await confirmDialog({
         title: `Hard reset ${cur}`,
-        message: `Move ${cur} to ${shortHash(hash)} and throw away every uncommitted change? Commits after it stay recoverable with Undo; uncommitted work does not.`,
+        message: `Move ${cur} to ${shortHash(hash)} and throw away every uncommitted change? GitDonkey keeps a copy of your changes first, and Undo brings back both the commits and the changes.`,
         okLabel: 'Hard reset',
         danger: true,
       });
       if (!ok) return;
+      const st = this.data.status;
+      if (st.staged.length + st.unstaged.length + st.conflicted.length) {
+        snap = await git(repo, 'snapshot', `Hard reset to ${shortHash(hash)}`, { kind: 'reset' }).catch(() => null);
+      }
     }
-    const repo = this.repo;
     const prev = this.headHash;
     const r = await this.run(`Reset ${cur} (${mode})`, () => git(repo, 'reset', hash, mode), { success: `${cur} reset to ${shortHash(hash)}` });
-    if (r) this.pushUndo({ label: `${mode} reset to ${shortHash(hash)}`, undo: () => git(repo, 'reset', prev, mode === 'hard' ? 'hard' : mode), redo: () => git(repo, 'reset', hash, mode) });
+    if (r) {
+      this.pushUndo({
+        label: `${mode} reset to ${shortHash(hash)}`,
+        undo: async () => {
+          await git(repo, 'reset', prev, mode);
+          if (snap) await git(repo, 'restoreSnapshot', snap.hash);
+        },
+        redo: () => git(repo, 'reset', hash, mode),
+      });
+    }
   }
 
   // ------------------------------------------------------------ tags
@@ -1384,10 +1756,16 @@ class App {
   }
 
   async dropStash(stash) {
-    const ok = await confirmDialog({ title: 'Delete stash?', message: `Delete “${stash.summary || stash.message}”? This cannot be undone.`, okLabel: 'Delete stash', danger: true });
+    const ok = await confirmDialog({ title: 'Delete stash?', message: `Delete “${stash.summary || stash.message}”? You can undo this, or get it back later from Recover lost work.`, okLabel: 'Delete stash', danger: true });
     if (!ok) return;
-    const r = await this.run('Delete stash', () => git(this.repo, 'stashDrop', stash.ref));
-    if (r && this.isSelectedStash(stash)) this.selectWip();
+    const repo = this.repo;
+    const r = await this.run('Delete stash', async () => {
+      await git(repo, 'keepStash', stash.ref).catch(() => null);
+      await git(repo, 'stashDrop', stash.ref);
+    });
+    if (!r) return;
+    if (this.isSelectedStash(stash)) this.selectWip();
+    this.pushUndo({ label: 'delete stash', undo: () => git(repo, 'stashStore', stash.hash, stash.message), redo: () => git(repo, 'stashDrop', 'stash@{0}') });
   }
 
   // ------------------------------------------------------------ remotes
@@ -1416,7 +1794,8 @@ class App {
     }
     const off = this.progressHandler();
     try {
-      await this.run('Fetch', () => git(this.repo, 'fetch', {}), { success: 'Fetched all remotes' });
+      const r = await this.run('Fetch', () => git(this.repo, 'fetch', {}), { success: 'Fetched all remotes' });
+      if (r) this.pulls.load(this.tab, { force: true });
     } finally {
       off();
     }
@@ -1449,8 +1828,9 @@ class App {
     }
     const off = this.progressHandler();
     try {
-      await this.run(`Pull ${mode === 'rebase' ? '(rebase)' : mode === 'ff-only' ? '(fast-forward only)' : ''}`.trim(), () => git(this.repo, 'pull', { mode }), {
+      return await this.run(`Pull ${mode === 'rebase' ? '(rebase)' : mode === 'ff-only' ? '(fast-forward only)' : ''}`.trim(), () => git(this.repo, 'pull', { mode }), {
         success: (r) => (/Already up to date/i.test(r.output || '') ? 'Already up to date' : `Pulled ${b.upstream} into ${b.name}`),
+        autoStash: true,
       });
     } finally {
       off();
@@ -1480,6 +1860,20 @@ class App {
       remoteBranch = v.name.trim();
       setUpstream = true;
     }
+    if (!force && !setUpstream && b.behind) {
+      const choice = await choiceDialog({
+        title: b.ahead ? `${b.name} has split from ${b.upstream}` : `${b.name} is behind ${b.upstream}`,
+        message: `${b.upstream} has ${pluralize(b.behind, 'commit')} you don’t have, so ${remote} would reject the push. Pull them in first, then push.`,
+        choices: [{ id: 'force', label: 'Force push…', danger: true }, { id: 'pull', label: 'Pull, then push' }],
+      });
+      if (!choice) return;
+      if (choice === 'force') return this.push({ force: true });
+      const r = await this.pull();
+      const now = this.data.refs.local.find((x) => x.isHead);
+      if (!r || r.conflicts || !now || now.behind) return;
+      if (!now.ahead) return;
+      return this.push();
+    }
     if (force) {
       const ok = await confirmDialog({ title: `Force push ${b.name}?`, message: `Overwrite ${remote}/${remoteBranch} with your local ${b.name}. Uses --force-with-lease, so it refuses if someone else pushed since your last fetch.`, okLabel: 'Force push', danger: true });
       if (!ok) return;
@@ -1489,7 +1883,7 @@ class App {
     let rejected = null;
     try {
       await git(this.repo, 'push', { remote, branch: b.name, remoteBranch, setUpstream, force });
-      toast({ type: 'success', title: `Pushed ${b.name} to ${remote}/${remoteBranch}` });
+      toast({ type: 'success', title: `Pushed ${b.name} to ${remote}/${remoteBranch}`, actions: this.pulls.afterPushActions(b.name) });
       this.lastError = null;
     } catch (e) {
       if (e.kind === 'PUSH_REJECTED' && !force) rejected = e;
@@ -1632,6 +2026,7 @@ class App {
         { label: 'Stash changes', icon: 'archive', shortcut: `${kb('⌘⌥S')}`, run: () => this.stash() },
         '-',
         { label: 'Discard all changes…', icon: 'trash-2', danger: true, run: () => this.discardAll() },
+        { label: 'Recover lost work…', icon: 'life-buoy', run: () => dialogs.recoverDialog(this) },
       ]);
       return;
     }
@@ -1641,6 +2036,7 @@ class App {
     contextMenu(x, y, [
       { label: 'Check out this commit', icon: 'crosshair', disabled: isHead && this.data.refs.head.detached, run: () => this.checkoutDetached(c.hash) },
       { label: 'Create branch here…', icon: 'git-branch', shortcut: `${kb('⌘B')}`, run: () => this.createBranch(c.hash, shortHash(c.hash)) },
+      { label: 'New worktree from here…', icon: 'folder-tree', run: () => this.newWorktree({ start: c.hash }) },
       { label: 'Create tag here…', icon: 'tag', run: () => this.createTag(c.hash) },
       '-',
       { label: cur ? `Cherry-pick onto ${cur}` : 'Cherry-pick onto HEAD', icon: 'git-commit-horizontal', disabled: isHead || Boolean(op), run: () => this.cherryPick(c.hash) },
@@ -1658,6 +2054,11 @@ class App {
       { label: 'Interactive rebase from here…', icon: 'layers', disabled: isHead || Boolean(op), run: () => this.interactiveRebase(c.hash) },
       isHead ? { label: 'Edit commit message…', icon: 'pencil', disabled: Boolean(op), run: () => this.editHeadMessage() } : null,
       '-',
+      { label: 'Explain with AI', icon: 'sparkles', run: () => {
+        this.selectCommit(c.hash, { scroll: false });
+        this.ai.explain(c.hash);
+      } },
+      '-',
       { label: 'Copy SHA', icon: 'copy', run: () => this.copy(c.hash, 'SHA copied') },
       { label: 'Copy message', icon: 'copy', run: () => this.copy(c.subject, 'Message copied') },
     ]);
@@ -1668,11 +2069,29 @@ class App {
     const cur = this.currentBranch;
     const op = this.data.opState;
     let items = [];
+    if (ref.type === 'pr') {
+      this.pulls.menu(ref.pr, x, y);
+      return;
+    }
+    if (ref.type === 'worktree') {
+      this.worktreeMenu(ref.worktree, x, y);
+      return;
+    }
+    if (ref.type === 'submodule') {
+      this.submoduleMenu(ref.submodule, x, y);
+      return;
+    }
+    const prs = this.pulls.state();
+    const github = prs.status === 'ready' || prs.status === 'signin';
     if (ref.type === 'local') {
       const b = ref.branch;
+      const pr = this.pulls.forBranch(b.name);
+      const wt = this.worktreeOf(b.name);
       items = [
         { header: b.name },
-        b.isHead ? null : { label: `Check out ${b.name}`, icon: 'check', run: () => this.checkoutBranch(b.name) },
+        b.isHead || wt ? null : { label: `Check out ${b.name}`, icon: 'check', run: () => this.checkoutBranch(b.name) },
+        wt ? { label: `Open its worktree (${basename(wt.path)})`, icon: 'folder-tree', run: () => this.openRepo(wt.path) } : null,
+        b.isHead || wt ? null : { label: 'Check out in a new worktree…', icon: 'folder-tree', run: () => this.newWorktree({ branch: b.name }) },
         b.isHead ? { label: 'Pull', icon: 'arrow-down-to-line', run: () => this.pull() } : null,
         b.isHead ? { label: 'Push', icon: 'arrow-up-from-line', run: () => this.push() } : null,
         !b.isHead && b.upstream && b.behind && !b.ahead ? { label: `Fast-forward to ${b.upstream}`, icon: 'arrow-up', run: () => this.fastForward(b.name, b.upstream) } : null,
@@ -1684,9 +2103,15 @@ class App {
         { label: 'Create tag here…', icon: 'tag', run: () => this.createTag(b.hash) },
         { label: 'Set upstream…', icon: 'cable', disabled: !this.data.refs.remote.length, run: () => this.setUpstreamFor(b.name) },
         { label: 'Rename…', icon: 'pencil', run: () => this.renameBranch(b.name) },
+        pr ? { label: `Open #${pr.number} on GitHub`, icon: 'git-pull-request', run: () => invoke('shell:openExternal', pr.url) } : null,
+        this.ai.baseFor(b.name) ? { label: `Summarise with AI (vs ${this.ai.baseFor(b.name)})`, icon: 'sparkles', run: () => this.ai.summarizeBranch(b.name, this.ai.baseFor(b.name)) } : null,
+        !pr && github && (!prs.base || b.name !== prs.base.defaultBranch) ? { label: 'Open pull request…', icon: 'git-pull-request', run: () => this.pulls.create(b.name) } : null,
         { label: `Delete ${b.name}`, icon: 'trash-2', danger: true, disabled: b.isHead, run: () => this.deleteBranch(b.name) },
         '-',
         { label: 'Copy branch name', icon: 'copy', run: () => this.copy(b.name, 'Branch name copied') },
+        '-',
+        { label: `Show only ${b.name} in the graph`, icon: 'list-filter', run: () => this.setGraphFilter({ only: [`refs/heads/${b.name}`], hidden: [] }) },
+        b.isHead ? null : { label: this.hiddenInGraph(`refs/heads/${b.name}`) ? 'Show in the graph' : 'Hide in the graph', icon: this.hiddenInGraph(`refs/heads/${b.name}`) ? 'eye' : 'eye-off', run: () => this.toggleHidden(`refs/heads/${b.name}`) },
       ];
     } else if (ref.type === 'remote') {
       items = [
@@ -1699,6 +2124,9 @@ class App {
         { label: `Delete ${ref.branchName} from ${ref.remote}…`, icon: 'trash-2', danger: true, run: () => this.deleteRemoteBranch(ref) },
         '-',
         { label: 'Copy branch name', icon: 'copy', run: () => this.copy(ref.name, 'Branch name copied') },
+        '-',
+        { label: `Show only ${ref.name} in the graph`, icon: 'list-filter', run: () => this.setGraphFilter({ only: [`refs/remotes/${ref.name}`], hidden: [] }) },
+        { label: this.hiddenInGraph(`refs/remotes/${ref.name}`) ? 'Show in the graph' : 'Hide in the graph', icon: this.hiddenInGraph(`refs/remotes/${ref.name}`) ? 'eye' : 'eye-off', run: () => this.toggleHidden(`refs/remotes/${ref.name}`) },
       ];
     } else if (ref.type === 'remote-root') {
       const r = ref.remote;
@@ -1761,6 +2189,10 @@ class App {
       items = [
         { label: `Stage${what}`, icon: 'plus', run: () => this.stage(files) },
         { label: `Discard changes${what}…`, icon: 'trash-2', danger: true, run: () => this.discard(files) },
+        one && (one.untracked || one.status === '?') && ext && this.tab.lfs && this.tab.lfs.installed
+          ? { label: `Track *${ext} with Git LFS`, icon: 'hard-drive', run: () => this.lfsTrack(`*${ext}`) }
+          : null,
+        one && one.submodule ? { label: 'Open submodule in a new tab', icon: 'package', run: () => this.openRepo(`${this.repo}/${one.path}`) } : null,
         one && (one.untracked || one.status === '?')
           ? { label: 'Ignore', icon: 'eye', submenu: [
               { label: `Ignore ${one.path}`, run: () => this.ignore(`/${one.path}`) },
@@ -1922,8 +2354,67 @@ class App {
 
   // ------------------------------------------------------------ commands & global events
 
+  /** The palette's commands: what the menus and keys do, by name. */
+  paletteCommands() {
+    const repo = Boolean(this.repo && this.data);
+    const d = this.data;
+    const st = d && d.status;
+    const dirty = st ? st.staged.length + st.unstaged.length + st.conflicted.length > 0 : false;
+    const tab = this.tab;
+    const c = (label, cmd, icon, keys, enabled = true) => ({ label, icon, keys, kind: 'Command', disabled: !enabled, run: () => (typeof cmd === 'function' ? cmd() : this.command(cmd)) });
+    const prs = this.pulls.state();
+    return [
+      c('Fetch all remotes', 'fetch', 'refresh-cw', kb('⌘⇧F'), repo && d.remotes.length > 0),
+      c('Pull', 'pull', 'arrow-down-to-line', kb('⌘⇧L'), repo),
+      c('Pull with rebase', () => this.pull('rebase'), 'arrow-down-to-line', null, repo),
+      c('Push', 'push', 'arrow-up-from-line', kb('⌘⇧P'), repo),
+      c('Force push…', () => this.push({ force: true }), 'arrow-up-from-line', null, repo),
+      c('Create branch…', 'branch', 'git-branch', kb('⌘B'), repo),
+      c('New worktree…', 'new-worktree', 'folder-tree', null, repo),
+      c('Stash changes', 'stash', 'archive', kb('⌘⌥S'), repo && dirty),
+      c('Pop latest stash', 'pop', 'archive-restore', kb('⌘⌥P'), repo && d.stashes.length > 0),
+      c('Stage all changes', 'stage-all', 'plus', kb('⌘⇧S'), repo && st.unstaged.length > 0),
+      c('Unstage all changes', 'unstage-all', 'minus', kb('⌘⇧U'), repo && st.staged.length > 0),
+      c('Discard all changes…', 'discard-all', 'trash-2', null, repo && dirty),
+      c('Write the commit message with AI', () => this.generateMessage(), 'sparkles', null, repo),
+      c('Review the staged changes with AI', () => this.ai.review(), 'shield-check', null, repo && st.staged.length > 0),
+      c('Explain the selected commit with AI', () => this.ai.explain(tab.ui.selection.hash), 'sparkles', null, Boolean(repo && tab.ui.selection.type === 'commit')),
+      c(`Summarise ${this.currentBranch || 'this branch'} with AI`, () => this.ai.summarizeBranch(this.currentBranch, this.ai.baseFor(this.currentBranch)), 'sparkles', null, Boolean(repo && this.currentBranch && this.ai.baseFor(this.currentBranch))),
+      c(tab && tab.ui.undo.length ? `Undo ${tab.ui.undo[tab.ui.undo.length - 1].label}` : 'Undo', 'undo', 'undo-2', kb('⌘Z'), Boolean(tab && tab.ui.undo.length)),
+      c(tab && tab.ui.redo.length ? `Redo ${tab.ui.redo[tab.ui.redo.length - 1].label}` : 'Redo', 'redo', 'redo-2', kb('⌘⇧Z'), Boolean(tab && tab.ui.redo.length)),
+      c('Recover lost work…', 'recover', 'life-buoy', null, repo),
+      c('Open pull request…', 'create-pr', 'git-pull-request', null, repo && prs.status !== 'none'),
+      c('Refresh pull requests', 'refresh-pulls', 'git-pull-request', null, repo && prs.status !== 'none'),
+      c('Connect GitHub…', 'connect-github', 'git-pull-request', null, repo),
+      c('Find commits', () => this.openSearch(), 'search', kb('⌘F'), repo),
+      c('Filter branches', 'filter', 'list-filter', kb('⌘⌥F'), repo),
+      c(`Show only ${this.currentBranch || 'the current branch'} in the graph`, () => this.setGraphFilter({ only: [`refs/heads/${this.currentBranch}`], hidden: [] }), 'list-filter', null, Boolean(repo && this.currentBranch)),
+      c('Hide branches in the graph…', () => this.pickBranches('hide'), 'eye-off', null, repo),
+      c('Show every branch in the graph', () => this.clearGraphFilter(), 'funnel-x', null, Boolean(repo && this.isFiltered())),
+      c('Add remote…', 'add-remote', 'cloud', null, repo),
+      c('Git identity…', 'identity', 'user', null, repo),
+      c('Sign commits…', () => dialogs.signingDialog(this), 'signature', null, repo),
+      c('Update submodules', () => this.updateSubmodules(), 'package', null, Boolean(repo && d.submodules && d.submodules.length)),
+      c('Open repository…', 'open', 'folder-open', kb('⌘O')),
+      c('Clone repository…', 'clone', 'download', kb('⌘⇧N')),
+      c('Start a new repository…', 'init', 'plus', kb('⌘⌥N')),
+      c('New tab', 'new-tab', 'plus', kb('⌘T')),
+      c('Close tab', 'close-tab', 'x', kb('⌘W')),
+      c('Open in Terminal', 'terminal', 'terminal', kb('⌘⌥T'), repo),
+      c(revealLabel, 'reveal', 'folder-open', null, repo),
+      c('Toggle sidebar', 'toggle-sidebar', 'panel-left', kb('⌘J')),
+      c('Toggle commit panel', 'toggle-panel', 'panel-right', kb('⌘K')),
+      c('Settings…', 'settings', 'settings', kb('⌘,')),
+      c('Themes…', 'themes', 'palette'),
+      c('AI settings…', 'ai-settings', 'sparkles'),
+      c('Keyboard shortcuts', 'shortcuts', 'keyboard', kb('⌘/')),
+      c('Refresh', 'refresh', 'refresh-cw', kb('⌘R'), repo),
+      c('Check for updates…', 'check-updates', 'download'),
+    ];
+  }
+
   command(cmd) {
-    const needsRepo = new Set(['fetch', 'pull', 'push', 'branch', 'stash', 'pop', 'stage-all', 'unstage-all', 'discard-all', 'undo', 'redo', 'add-remote', 'identity', 'refresh', 'terminal', 'reveal', 'search', 'filter']);
+    const needsRepo = new Set(['fetch', 'pull', 'push', 'branch', 'stash', 'pop', 'stage-all', 'unstage-all', 'discard-all', 'undo', 'redo', 'add-remote', 'identity', 'refresh', 'terminal', 'reveal', 'search', 'filter', 'recover', 'create-pr', 'connect-github', 'refresh-pulls', 'new-worktree']);
     if (needsRepo.has(cmd) && !this.repo) return;
     if (hasOpenModal() && !['refresh'].includes(cmd)) return;
     switch (cmd) {
@@ -1936,7 +2427,7 @@ class App {
       case 'prev-tab': return this.cycleTab(-1);
       case 'terminal': return invoke('shell:openTerminal', this.repo);
       case 'reveal': return invoke('shell:showItem', this.repo);
-      case 'search': return this.openSearch();
+      case 'search': return this.detail.isOpen() ? this.detail.openFind() : this.openSearch();
       case 'filter':
         if (this.layout.sidebarHidden) this.command('toggle-sidebar');
         return this.sidebar.focusFilter();
@@ -1957,6 +2448,12 @@ class App {
       case 'ai-settings': return dialogs.aiSettingsDialog(this);
       case 'themes': return themesDialog(this);
       case 'shortcuts': return dialogs.shortcutsDialog();
+      case 'palette': return openPalette(this);
+      case 'recover': return dialogs.recoverDialog(this);
+      case 'create-pr': return this.pulls.create();
+      case 'new-worktree': return this.newWorktree();
+      case 'connect-github': return this.pulls.connect();
+      case 'refresh-pulls': return this.pulls.load(this.tab, { force: true });
       case 'refresh': return this.refresh();
       case 'check-updates': return this.updates.check();
       case 'toggle-sidebar':
@@ -2008,7 +2505,10 @@ class App {
       const inText = e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"]');
       const meta = isMac ? e.metaKey : e.ctrlKey;
       if (e.key === 'Escape' && !hasOpenModal()) {
-        if (this.search) {
+        if (this.detail.find && !inText) {
+          e.preventDefault();
+          this.detail.closeFind();
+        } else if (this.search) {
           e.preventDefault();
           this.closeSearch();
         } else if (this.detail.isOpen() && !inText) {

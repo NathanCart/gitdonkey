@@ -1,7 +1,7 @@
 // Right-hand module: working tree (stage / commit) or commit details.
 import { h, icon, clear, avatar, led, legend, statusBadge, jack, kbd } from './dom.js';
 import { buildTree, splitPath, shortHash, relativeTime, fullDate, pluralize } from './lib/util.js';
-import { kb } from './api.js';
+import { kb, invoke } from './api.js';
 
 const SUMMARY_SOFT_LIMIT = 72;
 
@@ -22,6 +22,8 @@ export class Panel {
     this.wipHead = h('div', { class: 'module-head' });
     this.wipSub = h('div', { class: 'wip-sub' });
     this.banner = h('div', { class: 'op-banner', hidden: true });
+    this.syncBanner = h('div', { class: 'note-banner sync-banner', hidden: true });
+    this.repoBanner = h('div', { class: 'note-banner repo-banner', hidden: true });
     this.sections = h('div', { class: 'wip-sections' });
 
     this.summary = h('input', { class: 'input commit-summary', placeholder: 'Summary', spellcheck: 'true', 'aria-label': 'Commit summary', autocomplete: 'off' });
@@ -33,8 +35,10 @@ export class Panel {
     this.commitHint = h('div', { class: 'commit-hint' });
     this.aiLabel = h('span', null, 'Generate');
     this.aiBtn = h('button', { class: 'btn btn-tiny ai-btn', type: 'button', onClick: () => this.app.generateMessage() }, icon('sparkles', { size: 13 }), this.aiLabel);
+    this.signMark = h('span', { class: 'sign-mark', hidden: true }, icon('lock', { size: 12 }));
+    this.reviewBtn = h('button', { class: 'btn btn-tiny ai-key review-btn', type: 'button', onClick: () => this.app.ai.review() }, icon('shield-check', { size: 13 }), 'Review');
     this.box = h('div', { class: 'commit-box' },
-      h('div', { class: 'commit-legend' }, legend('Commit message'), h('span', { class: 'commit-tools' }, this.aiBtn, this.counter)),
+      h('div', { class: 'commit-legend' }, h('span', { class: 'commit-legend-l' }, legend('Commit message'), this.signMark), h('span', { class: 'commit-tools' }, this.reviewBtn, this.aiBtn, this.counter)),
       this.summary,
       this.desc,
       h('div', { class: 'commit-row' }, this.amendLabel, h('span', { class: 'commit-kbd' }, kbd(`${kb('⌘↵')}`))),
@@ -60,7 +64,7 @@ export class Panel {
     this.desc.addEventListener('keydown', onKey);
     this.amendBox.addEventListener('change', () => this.app.toggleAmend(this.amendBox.checked));
 
-    this.wip = h('div', { class: 'wip-panel' }, this.wipHead, this.wipSub, this.banner, this.sections, this.box);
+    this.wip = h('div', { class: 'wip-panel' }, this.wipHead, this.wipSub, this.syncBanner, this.repoBanner, this.banner, this.sections, this.box);
   }
 
   loadDraft() {
@@ -154,6 +158,8 @@ export class Panel {
         : h('span', { class: 'chip-ref', style: { '--jack': branchColor } }, jack(branchColor, { lit: true, size: 9 }), head.branch));
 
     this.renderBanner(op, st);
+    this.renderSyncBanner(op);
+    this.renderRepoBanner(op);
 
     clear(this.sections);
     if (st.conflicted.length) {
@@ -169,6 +175,75 @@ export class Panel {
     ] : [], view, 'Stage files, hunks or lines to include them in the next commit.'));
 
     this.updateCommitButton();
+  }
+
+  /** The branch and the one it tracks have moved apart (or the remote one is gone): say so, and how to fix it. */
+  renderSyncBanner(op) {
+    const el = this.syncBanner;
+    clear(el);
+    const d = this.app.data;
+    const b = d.refs.local.find((x) => x.isHead);
+    const show = b && b.upstream && !op && (b.gone || b.behind);
+    el.hidden = !show;
+    if (!show) return;
+    const commits = (n) => pluralize(n, 'commit');
+    let state;
+    let title;
+    let desc;
+    const buttons = [];
+    if (b.gone) {
+      state = 'amber';
+      title = `${b.upstream} is gone`;
+      desc = `The remote branch ${b.name} tracked was deleted. Push to publish it again, or stop tracking it.`;
+      buttons.push(h('button', { class: 'btn btn-small btn-key', onClick: () => this.app.push() }, 'Push'));
+      buttons.push(h('button', { class: 'btn btn-small', onClick: () => this.app.run('Stop tracking', () => this.app.gitCall('setUpstream', b.name, null), { success: `${b.name} no longer tracks a remote branch` }) }, 'Stop tracking'));
+    } else if (b.ahead) {
+      state = 'amber';
+      title = `${b.name} has split from ${b.upstream}`;
+      desc = `You have ${commits(b.ahead)} ${b.upstream} doesn’t, and it has ${commits(b.behind)} you don’t. Pull to combine them, then push.`;
+      buttons.push(h('button', { class: 'btn btn-small btn-key', onClick: () => this.app.pull() }, 'Pull'));
+      buttons.push(h('button', { class: 'btn btn-small', title: 'Replay your commits on top of theirs instead of merging', onClick: () => this.app.pull('rebase') }, 'Pull with rebase'));
+      buttons.push(h('button', { class: 'btn btn-small', onClick: () => this.app.revealUpstream(b) }, `Show ${b.upstream}`));
+    } else {
+      state = 'cyan';
+      title = `${b.upstream} has ${commits(b.behind)} you don’t`;
+      desc = `Pull to bring ${b.name} up to date.`;
+      buttons.push(h('button', { class: 'btn btn-small btn-key', onClick: () => this.app.pull() }, 'Pull'));
+      buttons.push(h('button', { class: 'btn btn-small', onClick: () => this.app.revealUpstream(b) }, `Show ${b.upstream}`));
+    }
+    el.dataset.state = b.gone ? 'gone' : b.ahead ? 'split' : 'behind';
+    el.append(
+      h('div', { class: 'op-title' }, led(state), h('span', null, title)),
+      h('div', { class: 'op-desc' }, desc),
+      h('div', { class: 'op-actions' }, buttons));
+  }
+
+  /** Submodules not set up yet, or Git LFS files without Git LFS. */
+  renderRepoBanner(op) {
+    const el = this.repoBanner;
+    clear(el);
+    const tab = this.app.tab;
+    const d = this.app.data;
+    const missing = (d.submodules || []).filter((x) => x.state === 'missing');
+    const lfs = tab.lfs && tab.lfs.used && !tab.lfs.installed && !tab.ui.lfsDismissed;
+    el.hidden = Boolean(op) || (!missing.length && !lfs);
+    if (el.hidden) return;
+    if (missing.length) {
+      el.append(
+        h('div', { class: 'op-title' }, led('cyan'), h('span', null, missing.length === 1 ? `The submodule ${missing[0].path} isn’t set up` : `${missing.length} submodules aren’t set up`)),
+        h('div', { class: 'op-desc' }, 'Their folders are empty until they’re cloned and checked out at the commits this branch records.'),
+        h('div', { class: 'op-actions' }, h('button', { class: 'btn btn-small btn-key', onClick: () => this.app.updateSubmodules(missing.map((x) => x.path)) }, missing.length === 1 ? 'Set it up' : 'Set them up')));
+      return;
+    }
+    el.append(
+      h('div', { class: 'op-title' }, led('amber'), h('span', null, 'Git LFS isn’t installed')),
+      h('div', { class: 'op-desc' }, `This repository keeps big files (${tab.lfs.patterns.slice(0, 3).join(', ')}${tab.lfs.patterns.length > 3 ? '…' : ''}) in Git LFS. Without it you get small pointer files instead of the real ones.`),
+      h('div', { class: 'op-actions' },
+        h('button', { class: 'btn btn-small btn-key', onClick: () => invoke('shell:openExternal', 'https://git-lfs.com') }, 'Get Git LFS'),
+        h('button', { class: 'btn btn-small', onClick: () => {
+          tab.ui.lfsDismissed = true;
+          this.render();
+        } }, 'Not now')));
   }
 
   renderBanner(op, st) {
@@ -279,8 +354,9 @@ export class Panel {
       title: f.oldPath ? `${f.oldPath} → ${f.path}` : f.path,
       dataset: { path: f.path },
     },
-    statusBadge(f.untracked ? '?' : f.status),
+    f.submodule ? h('span', { class: 'st st-sub', title: 'Submodule' }, icon('package', { size: 14 })) : statusBadge(f.untracked ? '?' : f.status),
     h('span', { class: 'file-name' }, h('span', { class: 'fn' }, displayName || name), !displayName && dir ? h('span', { class: 'fd' }, dir) : null),
+    f.submodule ? h('span', { class: 'sub-what' }, [f.submodule.commits && 'new commits', f.submodule.changes && 'changed files', f.submodule.untracked && 'untracked files'].filter(Boolean).join(', ') || 'submodule') : null,
     f.additions !== undefined && kind === 'commit' ? h('span', { class: 'file-stat' }, f.binary ? h('span', { class: 'bin' }, 'bin') : [f.additions ? h('span', { class: 'add' }, `+${f.additions}`) : null, f.deletions ? h('span', { class: 'del' }, `−${f.deletions}`) : null]) : null,
     this.rowAction(kind, [f]));
 
@@ -436,11 +512,16 @@ export class Panel {
     this.counter.classList.toggle('over', left < 0);
     this.counter.classList.toggle('near', left >= 0 && left < 10);
     this.amendBox.disabled = !this.app.headHash || Boolean(op);
+    const sig = this.app.signing;
+    this.signMark.hidden = !(sig && sig.enabled);
+    if (sig && sig.enabled) this.signMark.title = `Commits are signed with your ${sig.format === 'ssh' ? 'SSH' : 'GPG'} key (${String(sig.key || '').split(/[\\/]/).pop()})`;
     this.updateAiButton(st, amend);
   }
 
   updateAiButton(st, amend) {
     const ai = this.app.aiConfig();
+    this.reviewBtn.disabled = st.conflicted.length > 0 || (ai && !st.staged.length);
+    this.reviewBtn.title = !ai ? 'Set up AI to review your changes' : !st.staged.length ? 'Stage changes, then have AI look them over for bugs' : `Look over the staged changes for bugs before committing (${ai.label})`;
     const nothing = !st.staged.length && !(amend && this.app.headHash);
     this.aiBtn.disabled = Boolean(this.generating) || st.conflicted.length > 0 || (ai && nothing);
     this.aiBtn.title = !ai
@@ -468,6 +549,7 @@ export class Panel {
         h('button', { class: 'btn btn-small', onClick: () => this.app.applyStash(sel.stash, { pop: false }) }, 'Apply'),
         h('button', { class: 'icon-btn danger', title: 'Delete stash', onClick: () => this.app.dropStash(sel.stash) }, icon('trash-2', { size: 15 })));
     }
+    if (!isStash) headActions.push(h('button', { class: 'btn btn-tiny ai-key explain-btn', title: this.app.aiConfig() ? `Explain this commit (${this.app.aiConfig().label})` : 'Set up AI to explain commits', onClick: () => this.app.ai.explain(hash) }, icon('sparkles', { size: 13 }), 'Explain'));
     headActions.push(h('button', { class: 'icon-btn', title: 'Back to working tree', onClick: () => this.app.selectWip() }, icon('x', { size: 15 })));
     this.commitView.appendChild(h('div', { class: 'module-head' }, h('span', { class: 'led', style: { background: color } }), legend(isStash ? 'Stash' : 'Commit'), h('span', { class: 'spacer' }), headActions));
 
@@ -506,7 +588,9 @@ export class Panel {
             c.parents.length
               ? (isStash ? c.parents.slice(0, 1) : c.parents).map((p) => h('button', { class: 'stamp link', title: 'Select parent', onClick: () => this.app.selectCommit(p, { scroll: true }) }, shortHash(p)))
               : h('span', { class: 'cd-none' }, 'root commit')),
-          h('div', { class: 'cd-id' }, legend('Date'), h('span', { class: 'cd-date' }, fullDate(c.date))))),
+          h('div', { class: 'cd-id' }, legend('Date'), h('span', { class: 'cd-date' }, fullDate(c.date))),
+          c.signature ? h('div', { class: 'cd-id' }, legend('Signed'), signatureBadge(c.signature)) : null),
+        isStash ? null : this.app.ai.block(c.hash)),
       h('section', { class: 'files files-commit' },
         h('div', { class: 'files-head' },
           legend(pluralize(files.length, 'file')),
@@ -518,6 +602,22 @@ export class Panel {
             h('button', { class: ['seg-btn', view === 'tree' && 'on'], title: 'Tree view', onClick: () => this.app.setSetting('fileView', 'tree') }, icon('list-tree', { size: 14 })))),
         list)));
   }
+}
+
+const SIG = {
+  verified: ['green', 'Verified', 'Signed with a key this computer trusts'],
+  signed: ['cyan', 'Signed', 'A good signature, but the key isn’t one this computer knows. Add it to your allowed signers to verify it.'],
+  unverified: ['amber', 'Signed, not checked', 'Git can’t check this signature here: the key (or an allowed signers file) is missing.'],
+  expired: ['amber', 'Expired key', 'Signed with a key that has since expired'],
+  revoked: ['red', 'Revoked key', 'Signed with a key that has been revoked'],
+  bad: ['red', 'Bad signature', 'The signature doesn’t match the commit. It may have been changed after it was signed.'],
+};
+
+function signatureBadge(sig) {
+  const [state, word, why] = SIG[sig.status] || SIG.unverified;
+  const kind = sig.type === 'ssh' ? 'SSH' : sig.type === 'x509' ? 'X.509' : 'GPG';
+  return h('span', { class: ['sig-badge', `sig-${sig.status}`], title: `${why}\n${kind}${sig.signer ? ` · ${sig.signer}` : ''}${sig.key ? `\n${sig.key}` : ''}` },
+    led(state), word, sig.signer && sig.status === 'verified' ? h('span', { class: 'sig-who' }, sig.signer) : null);
 }
 
 function collectFiles(node) {

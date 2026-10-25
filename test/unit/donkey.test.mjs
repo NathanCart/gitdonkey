@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { LINES, pickLine, fill, eventForGit, moodOf } from '../../src/renderer/lib/donkey-lines.js';
 
 test('donkey: every line is short and every placeholder is one he’s given', () => {
-  const known = new Set(['branch', 'remote', 'ref', 'name', 'count', 'version']);
+  const known = new Set(['branch', 'remote', 'ref', 'name', 'count', 'version', 'number']);
   for (const [type, list] of Object.entries(LINES)) {
     assert.ok(list.length, type);
     for (const line of list) {

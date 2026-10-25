@@ -81,6 +81,108 @@ function buildPrompt({ diff, files = [], branch = null, recent = [], instruction
   return { system, user: lines.join('\n\n') };
 }
 
+const fileList = (files) => files.map((f) => `${f.status || 'M'} ${f.path}${f.oldPath ? ` (from ${f.oldPath})` : ''}`).join('\n');
+
+/**
+ * Explain a commit, or what a branch changes compared with another, for a
+ * teammate: one sentence, a few points, and a warning only if one's due.
+ */
+function buildExplainPrompt({ commit = null, range = null, files = [], diff = '' }) {
+  const system = [
+    'You explain Git changes to a developer on the same team.',
+    'Reply in plain text with no Markdown headings, bold or code fences:',
+    'first one sentence saying what the change does;',
+    'then up to six short lines, each starting with "- ", on the main changes and why they matter;',
+    'then, only if there is a real risk or something a reviewer should check, one line starting with "Watch out: ".',
+    'Describe what the diff actually does. Do not guess at motivation the diff and messages don’t show.',
+  ].join('\n');
+  const lines = [];
+  if (commit) {
+    lines.push(`Commit by ${commit.author}: ${commit.subject}`);
+    if (commit.body) lines.push(commit.body);
+  }
+  if (range) {
+    lines.push(`Branch ${range.head}, compared with ${range.base}.`);
+    if (range.commits.length) lines.push(`Its commits, newest first:\n${range.commits.map((c) => `- ${c.subject}`).join('\n')}`);
+  }
+  if (files.length) lines.push(`Files:\n${fileList(files)}`);
+  lines.push(`Diff:\n${condenseDiff(diff, { maxChars: 30000 })}`);
+  return { system, user: lines.join('\n\n') };
+}
+
+/** Title and description for a pull request from a branch's commits and diff. */
+function buildPullPrompt({ base, head, commits = [], files = [], diff = '', instructions = '' }) {
+  const system = [
+    'You write GitHub pull request titles and descriptions.',
+    'Reply with JSON only, no code fences: {"title": "...", "body": "..."}.',
+    'title: what the pull request does, in the imperative mood, at most 72 characters, no trailing full stop.',
+    'body: Markdown. One short paragraph on what changes and why, then a "## Changes" list of the main changes. Add "## Testing" only if the diff shows tests. Under 250 words.',
+    'Describe what the diff actually does. Do not invent tickets, screenshots or test results.',
+    instructions && String(instructions).trim() ? `The user's own instructions, which take priority over the style rules above:\n${String(instructions).trim()}` : '',
+  ].filter(Boolean).join('\n');
+  const lines = [`Merging ${head} into ${base}.`];
+  if (commits.length) lines.push(`Commits, newest first:\n${commits.map((c) => `- ${c.subject}`).join('\n')}`);
+  if (files.length) lines.push(`Files:\n${fileList(files)}`);
+  lines.push(`Diff:\n${condenseDiff(diff, { maxChars: 30000 })}`);
+  return { system, user: lines.join('\n\n') };
+}
+
+const SEVERITIES = new Set(['high', 'medium', 'low']);
+
+/** A review of the staged changes: real problems only, as JSON. */
+function buildReviewPrompt({ diff, files = [], branch = null }) {
+  const system = [
+    'You review code changes before they are committed, like a careful senior engineer.',
+    'Look for bugs, crashes, security problems, data loss, broken edge cases, and mistakes that would break the build. Skip style, naming and formatting.',
+    'Reply with JSON only, no code fences: {"summary": "...", "issues": [{"file": "path/in/repo", "line": 12, "severity": "high", "title": "...", "detail": "..."}]}.',
+    'severity: "high" (will break or is unsafe), "medium" (likely wrong), or "low" (worth a look).',
+    'line: the line number in the new version of the file, read from the diff hunk headers, or null.',
+    'title: under 80 characters. detail: one or two sentences on what goes wrong and how to fix it.',
+    'Only report problems you can point to in the diff. If there are none, give an empty issues list.',
+    'summary: one sentence on the overall state of the change.',
+  ].join('\n');
+  const lines = [];
+  if (branch) lines.push(`Branch: ${branch}`);
+  if (files.length) lines.push(`Files:\n${fileList(files)}`);
+  lines.push(`Staged diff:\n${condenseDiff(diff, { maxChars: 40000, perFile: 12000 })}`);
+  return { system, user: lines.join('\n\n') };
+}
+
+/** The JSON object in a reply, with or without code fences or a sentence around it. */
+function parseJsonReply(text) {
+  const s = String(text || '');
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  const bad = () => new AiError('The AI’s reply wasn’t in the expected format. Try again, or pick another model.', 'AI_FORMAT');
+  if (start === -1 || end <= start) throw bad();
+  try {
+    return JSON.parse(s.slice(start, end + 1));
+  } catch {
+    throw bad();
+  }
+}
+
+function parsePullReply(text) {
+  const j = parseJsonReply(text);
+  const title = typeof j.title === 'string' ? j.title.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  if (!title) throw new AiError('The AI didn’t write a title. Try again.', 'AI_FORMAT');
+  return { title, body: typeof j.body === 'string' ? j.body.trim() : '' };
+}
+
+function parseReviewReply(text) {
+  const j = parseJsonReply(text);
+  const issues = (Array.isArray(j.issues) ? j.issues : []).slice(0, 30).map((x) => ({
+    file: typeof x.file === 'string' ? x.file.trim().replace(/^[ab]\//, '') : '',
+    line: Number.isInteger(x.line) && x.line > 0 ? x.line : null,
+    severity: SEVERITIES.has(String(x.severity).toLowerCase()) ? String(x.severity).toLowerCase() : 'low',
+    title: typeof x.title === 'string' ? x.title.trim().slice(0, 200) : '',
+    detail: typeof x.detail === 'string' ? x.detail.trim().slice(0, 1200) : '',
+  })).filter((x) => x.title || x.detail);
+  const rank = { high: 0, medium: 1, low: 2 };
+  issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return { summary: typeof j.summary === 'string' ? j.summary.trim() : '', issues };
+}
+
 // The colours a theme sets, in the order the theme builder shows them
 // (src/renderer/lib/themes.js has the same list).
 const THEME_KEYS = [
@@ -323,6 +425,9 @@ async function listModels({ provider: id, key, baseUrl }, fetchImpl, { timeout =
 // for this session instead of being refused, and is never written in plain text.
 const KEYCHAIN_LOCKED = 'GitDonkey can’t read your saved API key because macOS Keychain access was declined. Reopen GitDonkey and click Always Allow, or paste the key again in AI settings to use it until you quit.';
 
+// Secrets kept alongside the AI keys.
+const OTHER_KEYS = new Set(['github']);
+
 class KeyVault {
   constructor(store, safeStorage) {
     this.store = store;
@@ -358,7 +463,7 @@ class KeyVault {
 
   /** Save a key (empty forgets it). Returns 'saved', 'session' (kept until quit, see above) or 'cleared'. */
   set(id, key) {
-    if (!PROVIDER[id]) throw new AiError('Unknown provider.', 'AI_CONFIG');
+    if (!PROVIDER[id] && !OTHER_KEYS.has(id)) throw new AiError('Unknown provider.', 'AI_CONFIG');
     const keys = { ...this.all() };
     const k = typeof key === 'string' ? key.trim() : '';
     this.session.delete(id);
@@ -383,4 +488,7 @@ class KeyVault {
   }
 }
 
-module.exports = { PROVIDERS, PROVIDER, AiError, condenseDiff, buildPrompt, buildThemePrompt, buildConflictPrompt, THEME_KEYS, parseMessage, complete, listModels, KeyVault };
+module.exports = {
+  PROVIDERS, PROVIDER, AiError, condenseDiff, buildPrompt, buildThemePrompt, buildConflictPrompt, buildExplainPrompt, buildPullPrompt, buildReviewPrompt,
+  parseJsonReply, parsePullReply, parseReviewReply, THEME_KEYS, parseMessage, complete, listModels, KeyVault,
+};

@@ -2,6 +2,8 @@
 // history, blame, and the conflict merge tool.
 import { h, icon, clear, legend, statusBadge, avatar, authorColor, led } from './dom.js';
 import { parseDiff, buildPatch, splitRows } from './lib/diff-parse.js';
+import { findAll, rangeIn } from './lib/find.js';
+import { parseLfsPointer, lfsDiff } from './lib/lfs.js';
 import { parseConflicts, resolveConflicts, conflictCount, conflictContext, parseResolutionReply } from './lib/conflicts.js';
 import { splitPath, languageFor, imageMime, shortHash, relativeTime, fullDate, pluralize } from './lib/util.js';
 import { git, invoke, kb } from './api.js';
@@ -25,7 +27,9 @@ export class DetailView {
     this.selBar = h('div', { class: 'sel-bar', hidden: true });
     // A map of where the changes are, beside the diff: click a mark to jump there.
     this.ruler = h('div', { class: 'change-ruler', hidden: true, title: 'Changes in this file. Click to jump.', onMousedown: (e) => this.onRuler(e) });
-    this.main = h('div', { class: 'detail-main' }, this.body, this.ruler);
+    this.findBar = h('div', { class: 'find-bar', hidden: true, role: 'search' });
+    this.main = h('div', { class: 'detail-main' }, this.body, this.ruler, this.findBar);
+    this.find = null;
     this.el.append(this.head, this.main, this.selBar);
     this.changes = [];
     this.nav = null;
@@ -61,6 +65,7 @@ export class DetailView {
   }
 
   close() {
+    this.closeFind();
     this.spec = null;
     this.token++;
     this.el.hidden = true;
@@ -172,6 +177,124 @@ export class DetailView {
       if (token !== this.token) return;
       clear(this.body).appendChild(h('div', { class: 'detail-msg error' }, h('div', { class: 'dm-title' }, 'Could not load this view'), h('div', null, e.message)));
     }
+    // What's on screen changed: find again in it.
+    if (token === this.token && this.find) this.runFind({ keep: true });
+  }
+
+  // ------------------------------------------------------------ find (⌘F)
+
+  openFind() {
+    if (!this.isOpen()) return;
+    const sel = String(window.getSelection() || '');
+    const preset = sel && !sel.includes('\n') && sel.length < 200 && this.body.contains(window.getSelection().anchorNode) ? sel : null;
+    if (!this.find) this.find = { query: '', matchCase: false, ranges: [], index: -1 };
+    if (preset) this.find.query = preset;
+    const bar = this.findBar;
+    clear(bar);
+    const input = h('input', { class: 'input find-input', placeholder: 'Find in this view', value: this.find.query, spellcheck: 'false', 'aria-label': 'Find in this view' });
+    this.findCount = h('span', { class: 'find-count', 'aria-live': 'polite' });
+    const caseBtn = h('button', { type: 'button', class: ['icon-btn', 'toggle', 'find-case', this.find.matchCase && 'on'], title: 'Match case', 'aria-pressed': String(this.find.matchCase), onClick: () => {
+      this.find.matchCase = !this.find.matchCase;
+      caseBtn.classList.toggle('on', this.find.matchCase);
+      caseBtn.setAttribute('aria-pressed', String(this.find.matchCase));
+      this.runFind();
+      input.focus();
+    } }, h('span', { class: 'find-aa' }, 'Aa'));
+    this.findWhole = h('button', { type: 'button', class: 'btn btn-tiny find-whole', hidden: true, title: 'Show the whole file, so Find covers all of it', onClick: () => this.app.setSetting('diffContext', 'full') }, 'Whole file');
+    bar.append(icon('search', { size: 14 }), input, this.findCount, this.findWhole, caseBtn,
+      h('button', { type: 'button', class: 'icon-btn', title: `Previous match (${kb('⇧↵')})`, 'aria-label': 'Previous match', onClick: () => this.stepFind(-1) }, icon('chevron-up', { size: 14 })),
+      h('button', { type: 'button', class: 'icon-btn', title: `Next match (${kb('↵')})`, 'aria-label': 'Next match', onClick: () => this.stepFind(1) }, icon('chevron-down', { size: 14 })),
+      h('button', { type: 'button', class: 'icon-btn', title: 'Close (Esc)', 'aria-label': 'Close find', onClick: () => this.closeFind() }, icon('x', { size: 14 })));
+    input.addEventListener('input', () => {
+      this.find.query = input.value;
+      this.runFind();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.stepFind(e.shiftKey ? -1 : 1);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.closeFind();
+      }
+    });
+    bar.hidden = false;
+    this.findInput = input;
+    input.focus();
+    input.select();
+    this.runFind();
+  }
+
+  closeFind() {
+    if (!this.find) return;
+    this.find = null;
+    this.findBar.hidden = true;
+    clear(this.findBar);
+    if (window.CSS && CSS.highlights) {
+      CSS.highlights.delete('find-hit');
+      CSS.highlights.delete('find-current');
+    }
+  }
+
+  /** Highlight every match of the query in the view's code, and keep the current one. */
+  runFind({ keep = false } = {}) {
+    const f = this.find;
+    if (!f) return;
+    const q = f.query;
+    const ranges = [];
+    if (q) {
+      for (const el of this.body.querySelectorAll('.code')) {
+        if (el.closest('.nonl, .cb-line.empty')) continue;
+        for (const start of findAll(el.textContent, q, { matchCase: f.matchCase })) {
+          const r = rangeIn(el, start, start + q.length);
+          if (r) ranges.push(r);
+          if (ranges.length >= 5000) break;
+        }
+        if (ranges.length >= 5000) break;
+      }
+    }
+    f.ranges = ranges;
+    if (!keep || f.index >= ranges.length) f.index = ranges.length ? this.firstVisibleMatch() : -1;
+    if (window.CSS && CSS.highlights && window.Highlight) {
+      CSS.highlights.set('find-hit', new Highlight(...ranges));
+      CSS.highlights.delete('find-current');
+    }
+    this.showFind({ scroll: !keep });
+  }
+
+  /** The first match at or below the top of what's on screen. */
+  firstVisibleMatch() {
+    const top = this.body.getBoundingClientRect().top;
+    const i = this.find.ranges.findIndex((r) => r.getBoundingClientRect().top >= top);
+    return i === -1 ? 0 : i;
+  }
+
+  stepFind(dir) {
+    const f = this.find;
+    if (!f || !f.ranges.length) return;
+    f.index = (f.index + dir + f.ranges.length) % f.ranges.length;
+    this.showFind({ scroll: true });
+  }
+
+  showFind({ scroll }) {
+    const f = this.find;
+    const n = f.ranges.length;
+    const cur = n ? f.ranges[f.index] : null;
+    if (this.findCount) {
+      this.findCount.textContent = !f.query ? '' : n ? `${f.index + 1} of ${n >= 5000 ? '5000+' : n}` : 'No matches';
+      this.findCount.classList.toggle('none', Boolean(f.query && !n));
+    }
+    if (this.findWhole) this.findWhole.hidden = !(this.mode === 'diff' && this.app.settings.diffContext !== 'full' && f.query);
+    if (window.CSS && CSS.highlights && window.Highlight) {
+      if (cur) CSS.highlights.set('find-current', new Highlight(cur));
+      else CSS.highlights.delete('find-current');
+    }
+    if (!cur || !scroll) return;
+    const r = cur.getBoundingClientRect();
+    const b = this.body.getBoundingClientRect();
+    if (r.top < b.top + 40 || r.bottom > b.bottom - 20) this.body.scrollTop += r.top - b.top - this.body.clientHeight * 0.35;
+    if (r.left < b.left + 120 || r.right > b.right - 20) this.body.scrollLeft += r.left - b.left - this.body.clientWidth * 0.4;
   }
 
   diffArgs(s) {
@@ -206,12 +329,45 @@ export class DetailView {
       else this.body.appendChild(this.message('Binary file', 'GitDonkey cannot show a text diff for this file.'));
       return;
     }
+    // A submodule moving, or a Git LFS pointer changing: say what it means instead of showing the raw lines.
+    const special = this.specialDiff(file, s);
+    if (special) {
+      this.body.appendChild(special);
+      return;
+    }
     this.file = file;
     this.renderDiff(file, s);
     if (quiet) this.body.scrollTop = scroll;
     this.indexChanges();
-    // The whole file is long; start where something changed.
-    if (!quiet && this.app.settings.diffContext === 'full' && this.changes.length) this.scrollToChange(0, { smooth: false });
+    // The whole file is long; start where something changed (or at the line asked for).
+    if (this.pendingLine) this.tryRevealLine();
+    else if (!quiet && this.app.settings.diffContext === 'full' && this.changes.length) this.scrollToChange(0, { smooth: false });
+  }
+
+  /** Scroll the diff to a line of the new file (when it's loaded, or once it is). */
+  revealLine(line) {
+    this.pendingLine = line;
+    this.tryRevealLine();
+  }
+
+  tryRevealLine() {
+    const line = this.pendingLine;
+    if (!line || this.mode !== 'diff') return;
+    const rows = [...this.body.querySelectorAll('.diff-unified .dl')].filter((r) => r.children[1] && r.children[1].textContent === String(line));
+    const split = rows.length ? [] : [...this.body.querySelectorAll('.diff-split .half')].filter((r, i) => r.parentElement.children[1] === r && r.firstChild && r.firstChild.textContent === String(line));
+    const row = rows[0] || (split[0] && split[0].parentElement);
+    if (!row) {
+      // Not in the hunks shown: show the whole file and look again.
+      if (this.body.querySelector('.diff') && this.app.settings.diffContext !== 'full') this.app.setSetting('diffContext', 'full');
+      return;
+    }
+    this.pendingLine = null;
+    const b = this.body.getBoundingClientRect();
+    this.body.scrollTop += row.getBoundingClientRect().top - b.top - this.body.clientHeight * 0.3;
+    row.classList.remove('flash');
+    void row.offsetWidth;
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 1300);
   }
 
   // ------------------------------------------------------------ finding changes
@@ -516,6 +672,11 @@ export class DetailView {
       } else this.body.appendChild(this.message('Binary file', `${formatBytes(res.size)}`));
       return;
     }
+    const pointer = parseLfsPointer(res.text);
+    if (pointer) {
+      this.body.appendChild(this.lfsMessage({ after: pointer }));
+      return;
+    }
     const lines = res.text.replace(/\n$/, '').split('\n');
     const hl = makeHighlighter(languageFor(p), lines.length);
     const wrap = h('div', { class: 'diff diff-unified file-view' });
@@ -816,6 +977,29 @@ export class DetailView {
   }
 
   // ------------------------------------------------------------ helpers
+
+  specialDiff(file, s) {
+    const lines = file.hunks.flatMap((x) => x.lines).filter((l) => l.type === '+' || l.type === '-');
+    const sub = (l) => (l ? (l.text.match(/^Subproject commit ([0-9a-f]{7,64})(-dirty)?$/) || null) : null);
+    if (lines.length && lines.every((l) => sub(l))) {
+      const from = sub(lines.find((l) => l.type === '-'));
+      const to = sub(lines.find((l) => l.type === '+'));
+      const what = from && to ? `Moved from ${shortHash(from[1])} to ${shortHash(to[1])}` : to ? `Added at ${shortHash(to[1])}` : `Removed (was at ${shortHash(from[1])})`;
+      const dirty = to && to[2] ? ' It also has uncommitted changes inside.' : '';
+      return this.message(`Submodule ${s.path}`, `${what}.${dirty} Open it to see its own history and changes.`, [{ label: 'Open the submodule', run: () => this.app.openRepo(`${this.app.repo}/${s.path}`) }]);
+    }
+    const lfs = lfsDiff(file);
+    return lfs ? this.lfsMessage(lfs) : null;
+  }
+
+  lfsMessage({ before = null, after = null }) {
+    const tab = this.app.tab;
+    const size = (p) => (p ? formatBytes(p.size) : null);
+    const what = before && after ? `${size(before)} → ${size(after)}` : after ? `${size(after)}, new` : `${size(before)}, removed`;
+    const missing = tab && tab.lfs && !tab.lfs.installed;
+    return this.message('Stored in Git LFS', `${what}. Git keeps a small pointer to the real file, which lives on the LFS server.${missing ? ' Git LFS isn’t installed, so this folder has the pointer, not the file.' : ''}`,
+      missing ? [{ label: 'Get Git LFS', run: () => invoke('shell:openExternal', 'https://git-lfs.com') }] : []);
+  }
 
   message(title, sub, actions = []) {
     return h('div', { class: 'detail-msg' },

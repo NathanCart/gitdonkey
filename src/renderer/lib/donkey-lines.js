@@ -44,21 +44,26 @@ export const LINES = {
   cherryPick: ['Cherry-picked. I prefer apples.', 'One cherry, picked.'],
   revert: ['Reverted. It never happened. It did, though.', 'Undone the polite way.'],
   tag: ['Tagged {name}. Ship it?', '{name}. Put it on the fridge.'],
-  discard: ['Gone. Hope you meant that.', 'Discarded. Into the void.'],
+  discard: ['Gone. I kept a copy, though.', 'Discarded. I hid a copy under the hay.'],
+  restore: ['Back from the dead. You’re welcome.', 'Found it. Donkeys never forget.'],
+  worktree: ['A second stable for {name}.', '{name} gets its own folder. Fancy.'],
   abort: ['Aborted. Nobody needs to know.'],
   error: ['That didn’t work. Don’t look at me.', 'Hmm. Git’s grumpy.', 'Something broke. Not me. Probably.'],
 
   theme: ['Ooh, {name}. Very me.', '{name}? I look great in this.', 'New coat. Hee-haw.'],
   aiMessage: ['A robot wrote that. I could’ve done it.', 'Fine, the AI’s good. I’m still cuter.'],
+  aiExplain: ['The robot says it’s fine. The robot would say that.', 'Explained. I could’ve told you, but nobody asked.'],
+  aiReview: ['{count} things to look at, says the robot.', 'Robot review done. Trust, but verify.'],
   aiResolve: ['A robot read your conflicts. Check its homework.', 'AI suggestions are in. Trust, but verify.'],
   update: ['There’s a newer me! Version {version}.', '{version} is out. Same donkey, better hay.'],
+  pullRequest: ['#{number} is out there. Hooves crossed.', 'Pull request #{number}. Now we wait for reviews.'],
   openRepo: ['{name}. Nice stable.', 'Ooh, {name}. Let’s have a look.'],
   manyChanges: ['{count} changes? Commit early, commit often.', '{count} changes. I’m not carrying all that at once.'],
 };
 
 /** How he looks while he says it. */
 export const MOODS = {
-  happy: new Set(['commit', 'push', 'pull', 'merge', 'tag', 'branchCreated', 'stashPop', 'feed', 'pet', 'theme', 'update', 'openRepo', 'back', 'hello']),
+  happy: new Set(['commit', 'push', 'pull', 'merge', 'tag', 'branchCreated', 'stashPop', 'feed', 'pet', 'theme', 'update', 'openRepo', 'back', 'hello', 'pullRequest', 'restore', 'worktree']),
   worried: new Set(['conflict', 'conflicts', 'pushRejected', 'error', 'noUpstream', 'manyChanges']),
   shocked: new Set(['forcePush', 'resetHard', 'discard', 'branchDeleted', 'annoyed', 'amend']),
 };
@@ -93,7 +98,9 @@ const short = (ref) => {
 const QUIET = new Set(['info', 'status', 'refs', 'log', 'searchCommits', 'stashes', 'remotes', 'opState', 'commitDetails',
   'changedFiles', 'diff', 'blob', 'showFile', 'fileHistory', 'blame', 'lastCommitMessage', 'isAncestor', 'revParse', 'identity',
   'stage', 'stageAll', 'unstage', 'unstageAll', 'applyPatch', 'readFile', 'validateBranchName', 'rangeCommits', 'conflictDetails',
-  'emptyTree', 'hasHead', 'fetch', 'setIdentity', 'setUpstream', 'writeFile', 'resolveConflict', 'markResolved', 'ignore']);
+  'emptyTree', 'hasHead', 'fetch', 'setIdentity', 'setUpstream', 'writeFile', 'resolveConflict', 'markResolved', 'ignore',
+  'worktrees', 'submodules', 'lfsInfo', 'signingConfig', 'signature', 'snapshot', 'snapshots', 'keepStash', 'lostCommits',
+  'danglingCommits', 'commitsBetween', 'commitPatch', 'rangePatch', 'deleteSnapshot', 'pruneWorktrees']);
 
 /** What a Git call from the renderer is worth saying, as { type, vars }, or null. */
 export function eventForGit({ method, args = [], ok, error }) {
@@ -129,6 +136,11 @@ export function eventForGit({ method, args = [], ok, error }) {
     case 'discardFull':
     case 'discardAll': return { type: 'discard' };
     case 'abortOperation': return { type: 'abort' };
+    case 'restoreSnapshot': return { type: 'restore' };
+    case 'addWorktree': {
+      const o = args[1] && typeof args[1] === 'object' ? args[1] : {};
+      return { type: 'worktree', vars: { name: short(o.branch || o.newBranch || '') || 'it' } };
+    }
     default: return null;
   }
 }

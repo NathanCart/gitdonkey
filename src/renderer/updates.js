@@ -32,7 +32,7 @@ export class Updates {
   }
 
   get restarts() {
-    return !this.note && ['replace', 'installer'].includes(this.state.install);
+    return !this.note && ['replace', 'installer', 'appimage'].includes(this.state.install);
   }
 
   update(s) {

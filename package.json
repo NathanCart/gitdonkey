@@ -1,17 +1,20 @@
 {
   "name": "gitdonkey",
   "productName": "GitDonkey",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "A free, open-source desktop Git client: commit graph, staging, merges and conflict resolution in a patched-modular-synth skin.",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/unit/*.test.*\"",
-    "test:e2e": "node test/e2e/run.js && node test/e2e/updates.js && node test/e2e/themes.js && node test/e2e/donkey.js && node test/e2e/conflicts.js && node test/e2e/diffnav.js",
+    "test:e2e": "node test/e2e/run.js && node test/e2e/updates.js && node test/e2e/themes.js && node test/e2e/donkey.js && node test/e2e/conflicts.js && node test/e2e/diffnav.js && node test/e2e/features.js",
     "dist": "electron-packager . GitDonkey --platform=darwin --arch=arm64 --out=dist --overwrite --icon=assets/icon --app-bundle-id=dev.gitdonkey.app --ignore=^/test --ignore=^/dist --ignore=^/\\.impeccable --ignore=^/scripts --ignore=^/demo --ignore=\\.impeccable --ignore=^/PRODUCT\\.md --ignore=^/assets/brand-sheet\\.png",
     "brand": "electron scripts/build-brand.js",
     "dist:win": "electron-builder --win nsis --x64 --publish never",
-    "dist:mac": "electron-builder --mac dmg --arm64 --x64 --publish never"
+    "dist:mac": "electron-builder --mac dmg --arm64 --x64 --publish never",
+    "dist:linux": "docker run --rm -v \"$PWD\":/src:ro -v \"$PWD/dist\":/out node:22-bookworm bash /src/scripts/linux/build.sh",
+    "dist:linux:native": "electron-builder --linux AppImage deb --x64 --arm64 --publish never",
+    "test:linux": "docker run --rm -v \"$PWD/dist\":/out -v \"$PWD/scripts/linux\":/scripts:ro debian:bookworm bash /scripts/smoke.sh deb && docker run --rm -v \"$PWD/dist\":/out -v \"$PWD/scripts/linux\":/scripts:ro debian:bookworm bash /scripts/smoke.sh appimage"
   },
   "license": "MIT",
   "devDependencies": {
@@ -73,7 +76,8 @@
       "artifactName": "GitDonkey-Setup-${version}-${arch}.${ext}"
     },
     "toolsets": {
-      "nsis": "1.2.1"
+      "nsis": "1.2.1",
+      "appimage": "1.0.3"
     },
     "mac": {
       "target": [
@@ -93,6 +97,58 @@
     },
     "dmg": {
       "title": "GitDonkey ${version}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Development",
+      "executableName": "gitdonkey",
+      "synopsis": "A free, open-source desktop Git client",
+      "description": "A free, open-source desktop Git client: commit graph, staging, merges and conflict resolution in a patched-modular-synth skin.",
+      "maintainer": "GitDonkey <noreply@gitdonkey.com>",
+      "artifactName": "GitDonkey-${version}-linux-${arch}.${ext}",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "GitDonkey"
+        }
+      }
+    },
+    "deb": {
+      "depends": [
+        "git",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libgbm1",
+        "libasound2 | libasound2t64"
+      ]
+    },
+    "appImage": {
+      "artifactName": "GitDonkey-${version}-linux-${arch}.${ext}",
+      "executableArgs": [
+        "--no-sandbox"
+      ]
     }
   },
   "repository": {

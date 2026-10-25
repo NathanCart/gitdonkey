@@ -1,6 +1,6 @@
 // Task dialogs: clone, init, settings, identity, upstream, remotes, tags,
 // branches, interactive rebase, shortcuts.
-import { h, icon, clear, legend, kbd, logoMark } from './dom.js';
+import { h, icon, clear, legend, kbd, logoMark, avatar } from './dom.js';
 import { openModal, formDialog, confirmDialog, field, toast } from './ui.js';
 import { git, invoke, on, kb, sep, isAbsolutePath, isMac } from './api.js';
 import { guessRepoName, shortHash, relativeTime, pluralize } from './lib/util.js';
@@ -131,6 +131,7 @@ export async function settingsDialog(app) {
   const id = app.repo ? await git(app.repo, 'identity').catch(() => ({})) : {};
   const s = app.settings;
   const themeHint = h('div', { class: 'field-hint' }, app.theme().name);
+  const signHint = h('div', { class: 'field-hint' }, signingLabel(app.signing));
   const values = await formDialog({
     title: 'Settings',
     okLabel: 'Save',
@@ -162,7 +163,12 @@ export async function settingsDialog(app) {
         }) }, 'Change…')),
       h('div', { class: 'settings-ai' },
         h('div', null, h('div', { class: 'field-label' }, 'AI commit messages'), h('div', { class: 'field-hint' }, app.aiConfig() ? app.aiConfig().label : 'Off')),
-        h('button', { type: 'button', class: 'btn btn-small', onClick: () => aiSettingsDialog(app) }, app.aiConfig() ? 'Change…' : 'Set up…'))),
+        h('button', { type: 'button', class: 'btn btn-small', onClick: () => aiSettingsDialog(app) }, app.aiConfig() ? 'Change…' : 'Set up…')),
+      app.repo ? h('div', { class: 'settings-ai' },
+        h('div', null, h('div', { class: 'field-label' }, 'Commit signing'), signHint),
+        h('button', { type: 'button', class: 'btn btn-small', dataset: { action: 'signing' }, onClick: () => signingDialog(app).then((c) => {
+          if (c) signHint.textContent = signingLabel(c);
+        }) }, 'Change…')) : null),
     validate: (v) => (app.repo && v.email && !/^[^\s@]+@[^\s@]+$/.test(v.email.trim()) ? 'Enter a valid email address.' : null),
   });
   if (!values) return;
@@ -180,6 +186,75 @@ export async function settingsDialog(app) {
     await git(app.repo, 'setIdentity', { name: values.name, email: values.email, global: true }).catch((e) => toast({ type: 'error', title: 'Could not save identity', message: e.message }));
   }
   toast({ type: 'success', title: 'Settings saved' });
+}
+
+// ---------------------------------------------------------------- commit signing
+
+export function signingLabel(cfg) {
+  if (!cfg || !cfg.enabled) return 'Off';
+  const key = String(cfg.key || '').split(/[\\/]/).pop();
+  return `${cfg.format === 'ssh' ? 'SSH' : cfg.format === 'x509' ? 'X.509' : 'GPG'} key ${key}${cfg.scope === 'local' ? ' (this repository)' : ''}`;
+}
+
+/** Sign commits with an SSH or GPG key, everywhere or in this repository. */
+export async function signingDialog(app) {
+  if (!app.repo) return null;
+  const [cfg, keys] = await Promise.all([
+    git(app.repo, 'signingConfig').catch(() => ({ enabled: false })),
+    invoke('signing:keys').catch(() => ({ ssh: [], gpg: [] })),
+  ]);
+  const sshOptions = keys.ssh.map((k) => ({ value: k.path, label: `${k.path.split(/[\\/]/).pop()} · ${k.type.replace(/^ssh-/, '')}${k.comment ? ` · ${k.comment}` : ''}` }));
+  if (cfg.format === 'ssh' && cfg.key && !sshOptions.some((o) => o.value === cfg.key)) sshOptions.unshift({ value: cfg.key, label: cfg.key });
+  const gpgOptions = keys.gpg.map((k) => ({ value: k.id, label: `${k.uid || 'Key'} · ${k.id.slice(-8)}` }));
+  if (cfg.format === 'gpg' && cfg.key && !gpgOptions.some((o) => o.value === cfg.key)) gpgOptions.unshift({ value: cfg.key, label: cfg.key });
+  const how = !cfg.enabled ? 'off' : cfg.format === 'gpg' ? 'gpg' : 'ssh';
+  let current = null;
+  const ghLink = h('button', { type: 'button', class: 'btn btn-small', onClick: () => invoke('shell:openExternal', current && current.how === 'gpg' ? 'https://github.com/settings/gpg/new' : 'https://github.com/settings/ssh/new') }, icon('external-link', { size: 13 }), 'Add it on GitHub');
+  const copyBtn = h('button', { type: 'button', class: 'btn btn-small', onClick: async () => {
+    const pub = current && current.ssh ? await invoke('signing:publicKey', current.ssh).catch(() => null) : null;
+    if (pub) app.copy(pub, 'Public key copied. On GitHub, add it as a Signing key.');
+    else toast({ type: 'error', title: 'Couldn’t read that key' });
+  } }, icon('copy', { size: 13 }), 'Copy public key');
+  const note = h('div', { class: 'cred-hint sign-hint' }, h('span', null, 'GitHub marks your commits Verified once the same key is added to your account as a signing key.'), h('span', { class: 'sign-hint-keys' }, copyBtn, ghLink));
+  const v = await formDialog({
+    title: 'Sign commits',
+    okLabel: 'Save',
+    width: 560,
+    intro: h('p', { class: 'modal-text' }, 'A signature proves a commit came from you. Git signs each commit with your key as you make it.'),
+    fields: [
+      { name: 'how', label: 'Sign with', type: 'select', value: how, options: [
+        { value: 'off', label: 'Don’t sign' },
+        { value: 'ssh', label: 'An SSH key' },
+        ...(keys.gpg.length || cfg.format === 'gpg' ? [{ value: 'gpg', label: 'A GPG key' }] : []),
+      ] },
+      { name: 'ssh', label: 'SSH key', type: 'select', value: cfg.format === 'ssh' ? cfg.key : sshOptions[0] && sshOptions[0].value, options: sshOptions.length ? sshOptions : [{ value: '', label: 'No keys in ~/.ssh' }], hint: sshOptions.length ? 'The public key (.pub). The private key next to it signs; a passphrase is asked for by your SSH agent.' : 'Make one with: ssh-keygen -t ed25519' },
+      { name: 'gpg', label: 'GPG key', type: 'select', value: cfg.format === 'gpg' ? cfg.key : gpgOptions[0] && gpgOptions[0].value, options: gpgOptions.length ? gpgOptions : [{ value: '', label: 'No GPG keys found' }] },
+      { name: 'scope', label: 'For', type: 'select', value: cfg.scope || 'global', options: [{ value: 'global', label: 'Every repository' }, { value: 'local', label: `Just ${app.tab.name}` }] },
+    ],
+    extra: note,
+    onChange: (x, inputs) => {
+      current = x;
+      inputs.ssh.closest('.field').hidden = x.how !== 'ssh';
+      inputs.gpg.closest('.field').hidden = x.how !== 'gpg';
+      inputs.scope.closest('.field').hidden = x.how === 'off';
+      note.hidden = x.how === 'off';
+      copyBtn.hidden = x.how !== 'ssh' || !x.ssh;
+    },
+    validate: (x) => (x.how === 'ssh' && !x.ssh ? 'Choose an SSH key, or make one first.' : x.how === 'gpg' && !x.gpg ? 'Choose a GPG key.' : null),
+  });
+  if (!v) return null;
+  try {
+    const next = await git(app.repo, 'setSigning', v.how === 'off' ? { enabled: false, scope: v.scope } : { enabled: true, format: v.how, key: v.how === 'ssh' ? v.ssh : v.gpg, scope: v.scope });
+    app.signing = next;
+    app.panel.updateCommitButton();
+    toast({ type: 'success', title: next.enabled ? 'Commits will be signed' : 'Commits won’t be signed', message: next.enabled ? signingLabel(next) : '' });
+    return next;
+  } catch (e) {
+    toast({ type: 'error', title: 'Couldn’t set up signing', message: e.message });
+    return null;
+  } finally {
+    current = null;
+  }
 }
 
 // ---------------------------------------------------------------- AI commit messages
@@ -490,6 +565,184 @@ export async function interactiveRebaseDialog(app, { base, baseLabel }) {
   });
 }
 
+// ---------------------------------------------------------------- graph filter
+
+/** Tick branches (local and remote); resolves to their full refnames, or null. */
+export function branchPickerDialog(app, { title, okLabel, selected = [] }) {
+  const d = app.data;
+  const chosen = new Set(selected);
+  const groups = [
+    ['Local', d.refs.local.map((b) => ({ full: `refs/heads/${b.name}`, name: b.name, head: b.isHead }))],
+    ...d.remotes.map((r) => [r.name, d.refs.remote.filter((b) => b.remote === r.name).map((b) => ({ full: `refs/remotes/${b.shortName}`, name: b.shortName }))]),
+  ].filter(([, list]) => list.length);
+  const filter = h('input', { class: 'input', placeholder: 'Filter', spellcheck: 'false', 'aria-label': 'Filter branches' });
+  const list = h('div', { class: 'bp-list' });
+  const count = h('span', { class: 'bp-count' });
+  const sync = () => {
+    count.textContent = `${chosen.size} chosen`;
+  };
+  const render = () => {
+    const q = filter.value.trim().toLowerCase();
+    clear(list);
+    for (const [label, items] of groups) {
+      const shown = items.filter((x) => !q || x.name.toLowerCase().includes(q));
+      if (!shown.length) continue;
+      list.appendChild(h('div', { class: 'th-head bp-group' }, label));
+      for (const x of shown) {
+        const box = h('input', { type: 'checkbox', checked: chosen.has(x.full) });
+        box.addEventListener('change', () => {
+          if (box.checked) chosen.add(x.full);
+          else chosen.delete(x.full);
+          sync();
+        });
+        list.appendChild(h('label', { class: 'check bp-row' }, box, h('span', { class: 'check-box' }, icon('check', { size: 12, stroke: 3 })), h('span', { class: 'mono' }, x.name), x.head ? h('span', { class: 'bp-head' }, 'current') : null));
+      }
+    }
+  };
+  filter.addEventListener('input', render);
+  render();
+  sync();
+  return new Promise((resolve) => {
+    openModal({
+      title,
+      width: 480,
+      body: h('div', { class: 'stack' }, h('div', { class: 'input-row' }, filter, h('button', { type: 'button', class: 'btn btn-small', onClick: () => {
+        chosen.clear();
+        render();
+        sync();
+      } }, 'None')), list, count),
+      actions: [{ label: 'Cancel', run: (close) => close(null) }, { label: okLabel, primary: true, run: (close) => close([...chosen]) }],
+      onClose: (r) => resolve(r || null),
+    });
+  });
+}
+
+// ---------------------------------------------------------------- worktrees
+
+/** A new worktree: an existing branch, or a new one, checked out in a folder of its own. */
+export async function worktreeDialog(app, { branch = '', start = null } = {}) {
+  const d = app.data;
+  const root = app.repo;
+  const parts = root.split(/[\\/]/);
+  const repoName = parts.pop();
+  const parent = parts.join(sep) || sep;
+  const busy = new Map((d.worktrees || []).filter((w) => w.branch).map((w) => [w.branch, w.path]));
+  const free = d.refs.local.map((b) => b.name).filter((n) => !busy.has(n));
+  const slug = (n) => n.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const folderFor = (n) => joinPath(parent, `${repoName}-${slug(n) || 'worktree'}`);
+  const startLabel = start ? shortHash(start) : app.currentBranch || shortHash(app.headHash);
+  let folderTouched = false;
+  const list = h('datalist', { id: 'wt-branches' }, free.map((n) => h('option', { value: n })));
+  const v = await formDialog({
+    title: 'New worktree',
+    okLabel: 'Create worktree',
+    width: 560,
+    pickFolder,
+    intro: h('p', { class: 'modal-text' }, 'A worktree is a second folder with its own checked-out branch, sharing this repository’s history. Work on two branches at once without stashing.'),
+    fields: [
+      { name: 'branch', label: 'Branch', value: branch, placeholder: 'feature/new-idea', mono: true, hint: 'An existing branch, or a new one to create.' },
+      { name: 'folder', label: 'Folder', type: 'folder', value: branch ? folderFor(branch) : '', mono: true },
+      { name: 'open', type: 'checkbox', label: 'Open it in a new tab', value: true },
+    ],
+    extra: list,
+    onChange: (x, inputs) => {
+      inputs.branch.setAttribute('list', 'wt-branches');
+      if (document.activeElement === inputs.folder) folderTouched = true;
+      if (!folderTouched && x.branch.trim()) inputs.folder.value = folderFor(x.branch.trim());
+      const hint = inputs.branch.closest('.field').querySelector('.field-hint');
+      const name = x.branch.trim();
+      hint.textContent = !name ? 'An existing branch, or a new one to create.'
+        : busy.has(name) ? `${name} is already checked out in ${busy.get(name)}.`
+          : free.includes(name) ? `Checks out ${name}.` : `Creates ${name} at ${startLabel}.`;
+    },
+    validate: async (x) => {
+      const name = x.branch.trim();
+      if (!name) return 'Enter a branch.';
+      if (busy.has(name)) return `${name} is already checked out in ${busy.get(name)}.`;
+      if (!free.includes(name) && !(await git(root, 'validateBranchName', name).catch(() => false))) return `“${name}” is not a valid branch name.`;
+      if (!isAbsolutePath(x.folder)) return 'Choose a folder for it.';
+      return null;
+    },
+  });
+  if (!v) return null;
+  const name = v.branch.trim();
+  return { branch: name, existing: free.includes(name), start: start || app.headHash, folder: v.folder.trim(), open: v.open };
+}
+
+// ---------------------------------------------------------------- recover lost work
+
+/** Everything GitDonkey (or Git) still has that nothing points to: snapshots, lost commits, dropped stashes. */
+export async function recoverDialog(app) {
+  if (!app.repo) return;
+  const repo = app.repo;
+  const body = h('div', { class: 'recover' });
+  let modal = null;
+  const act = (fn) => async () => {
+    modal.close(null);
+    await fn();
+  };
+  const row = ({ ico, title, meta, actions, person }) => h('div', { class: 'rv-row' },
+    person ? avatar(person.name, person.email, 22) : h('span', { class: 'rv-ico' }, icon(ico, { size: 15 })),
+    h('div', { class: 'rv-text' }, h('div', { class: 'rv-title' }, title), h('div', { class: 'rv-meta' }, meta)),
+    h('div', { class: 'rv-actions' }, actions));
+  const btn = (label, run, { key = false, title } = {}) => h('button', { type: 'button', class: ['btn', 'btn-small', key && 'btn-key'], title, onClick: run }, label);
+  const section = (title, hint, rows, empty) => h('section', { class: 'rv-section' },
+    h('h3', { class: 'th-head' }, title),
+    hint ? h('p', { class: 'rv-hint' }, hint) : null,
+    rows.length ? h('div', { class: 'rv-list' }, rows) : h('div', { class: 'rv-empty' }, empty));
+
+  const commitRows = (list) => list.map((c) => row({
+    person: { name: c.author, email: c.email },
+    title: c.stashLike ? c.subject.replace(/^(?:WIP on|On) [^:]+: /, 'Stash: ') : c.subject || '(no message)',
+    meta: [shortHash(c.hash), c.commits > 1 ? pluralize(c.commits, 'commit') : null, c.lostBy ? `after “${c.lostBy}”` : null, relativeTime(c.lostAt || c.date)].filter(Boolean).join(' · '),
+    actions: c.stashLike
+      ? [btn('Restore', act(() => app.restoreSnapshot(c.hash, 'stash')), { key: true, title: 'Apply these changes to the working tree' }),
+         btn('Keep as stash', act(() => app.run('Keep as stash', () => git(repo, 'stashStore', c.hash, c.subject), { success: 'Back on the stash list' })))]
+      : [btn('Create branch…', act(() => app.createBranch(c.hash, shortHash(c.hash))), { key: true, title: 'Point a new branch at it, so it’s kept' }),
+         btn('Cherry-pick', act(() => app.cherryPick(c.hash)), { title: `Copy it onto ${app.currentBranch || 'HEAD'}` })],
+  }));
+
+  const render = async ({ deep = null } = {}) => {
+    const [snaps, lost] = await Promise.all([git(repo, 'snapshots').catch(() => []), git(repo, 'lostCommits').catch(() => [])]);
+    const snapRows = snaps.map((s) => row({
+      ico: s.kind === 'stash' ? 'archive' : 'life-buoy',
+      title: s.label,
+      meta: [s.files ? pluralize(s.files, 'file') : null, s.branch ? `on ${s.branch}` : null, relativeTime(s.date)].filter(Boolean).join(' · '),
+      actions: [
+        btn('Restore', act(() => app.restoreSnapshot(s.hash, s.label)), { key: true, title: 'Apply these changes to the working tree again' }),
+        btn('Keep as stash', act(() => app.run('Keep as stash', () => git(repo, 'stashStore', s.hash, s.subject), { success: 'Added to your stashes' }))),
+        h('button', { type: 'button', class: 'icon-btn danger', title: 'Delete this copy', 'aria-label': 'Delete this copy', onClick: async () => {
+          await git(repo, 'deleteSnapshot', s.ref).catch((e) => toast({ type: 'error', title: 'Couldn’t delete it', message: e.message }));
+          render({ deep });
+        } }, icon('trash-2', { size: 14 })),
+      ],
+    }));
+    const seen = new Set(lost.map((c) => c.hash));
+    const extra = deep ? deep.filter((c) => !seen.has(c.hash) && !snaps.some((s) => s.hash === c.hash)) : null;
+    const searchBtn = h('button', { type: 'button', class: 'btn btn-small', onClick: async () => {
+      searchBtn.disabled = true;
+      searchBtn.textContent = 'Searching…';
+      try {
+        render({ deep: await git(repo, 'danglingCommits') });
+      } catch (e) {
+        toast({ type: 'error', title: 'Search failed', message: e.message });
+        searchBtn.disabled = false;
+        searchBtn.textContent = 'Search deeper';
+      }
+    } }, icon('scan-search', { size: 14 }), 'Search deeper');
+    clear(body).append(
+      h('p', { class: 'modal-text rv-intro' }, 'GitDonkey keeps a copy of your changes before it discards them, hard-resets or drops a stash. Commits you were on that no branch reaches any more are here too, until Git cleans them up.'),
+      section('Kept by GitDonkey', null, snapRows, 'Nothing yet. Copies appear here when you discard changes, hard-reset or delete a stash.'),
+      section('Commits no branch points to', 'From where HEAD has been. Create a branch to keep one.', commitRows(lost), 'None. Every commit you’ve been on is on a branch.'),
+      extra
+        ? section('Found by a deeper search', 'Dropped stashes and commits Git still has but nothing points to.', commitRows(extra), 'Nothing else turned up.')
+        : h('div', { class: 'rv-deep' }, h('span', { class: 'rv-hint' }, 'Lost a stash you dropped outside GitDonkey, or a branch you never checked out?'), searchBtn));
+  };
+  body.appendChild(h('div', { class: 'detail-loading' }, h('div', { class: 'skel w60' }), h('div', { class: 'skel w80' })));
+  modal = openModal({ title: 'Recover lost work', width: 760, className: 'recover-modal', body, actions: [{ label: 'Done', primary: true, run: (close) => close(null) }] });
+  await render();
+}
+
 // ---------------------------------------------------------------- credentials
 
 const TOKEN_PAGES = {
@@ -572,8 +825,8 @@ export async function credentialDialog(app, req) {
 
 export function shortcutsDialog() {
   const rows = [
-    ['Open repository', `${kb('⌘O')}`], ['Clone repository', `${kb('⌘⇧N')}`], ['New repository', `${kb('⌘⌥N')}`],
-    ['New tab / close tab', `${kb('⌘T')} / ${kb('⌘W')}`], ['Find commits', `${kb('⌘F')}`], ['Filter branches', `${kb('⌘⌥F')}`],
+    ['Command palette: any action, branch or file', `${kb('⌘P')}`], ['Open repository', `${kb('⌘O')}`], ['Clone repository', `${kb('⌘⇧N')}`], ['New repository', `${kb('⌘⌥N')}`],
+    ['New tab / close tab', `${kb('⌘T')} / ${kb('⌘W')}`], ['Find commits, or find in the open diff or file', `${kb('⌘F')}`], ['Filter branches', `${kb('⌘⌥F')}`],
     ['Fetch all', `${kb('⌘⇧F')}`], ['Pull', `${kb('⌘⇧L')}`], ['Push', `${kb('⌘⇧P')}`], ['Create branch', `${kb('⌘B')}`],
     ['Stash / pop stash', `${kb('⌘⌥S')} / ${kb('⌘⌥P')}`], ['Stage all / unstage all', `${kb('⌘⇧S')} / ${kb('⌘⇧U')}`],
     ['Commit', `${kb('⌘↵')} in the message`], ['Undo / redo Git action', `${kb('⌘Z')} / ${kb('⌘⇧Z')} (outside text fields)`],

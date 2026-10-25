@@ -8,13 +8,14 @@ const { spawn } = require('child_process');
 if (process.env.GITDONKEY_USER_DATA) app.setPath('userData', process.env.GITDONKEY_USER_DATA);
 app.setName('GitDonkey');
 
-const { GitRepo, resolveRoot, initRepo, cloneRepo, configureGit, detectGitHubCli, githubCliCredentialConfig, credentialHelpers, enableCredentialHelper } = require('./git');
+const { GitRepo, resolveRoot, initRepo, cloneRepo, configureGit, detectGitHubCli, githubCliCredentialConfig, credentialHelpers, enableCredentialHelper, signingKeys } = require('./git');
 const { AskpassServer } = require('./askpass');
 const { Store } = require('./store');
 const { RepoWatcher } = require('./watcher');
 const { AvatarService } = require('./avatars');
-const { PROVIDERS, PROVIDER, AiError, buildPrompt, buildThemePrompt, buildConflictPrompt, parseMessage, complete, listModels, KeyVault } = require('./ai');
+const { PROVIDERS, PROVIDER, AiError, buildPrompt, buildThemePrompt, buildConflictPrompt, buildExplainPrompt, buildPullPrompt, buildReviewPrompt, parsePullReply, parseReviewReply, parseMessage, complete, listModels, KeyVault } = require('./ai');
 const { Updater } = require('./updater');
+const { GitHub, githubRemote } = require('./github');
 
 // Methods of GitRepo the renderer may call.
 const GIT_METHODS = new Set([
@@ -28,9 +29,12 @@ const GIT_METHODS = new Set([
   'conflictDetails', 'resolveConflict', 'markResolved', 'createTag', 'deleteTag', 'pushTag',
   'deleteRemoteTag', 'stashSave', 'stashApply', 'stashDrop', 'fetch', 'pull', 'push',
   'deleteRemoteBranch', 'addRemote', 'removeRemote', 'renameRemote', 'setRemoteUrl', 'emptyTree', 'hasHead',
+  'stashStore', 'snapshot', 'keepStash', 'snapshots', 'deleteSnapshot', 'restoreSnapshot', 'lostCommits', 'danglingCommits',
+  'commitsBetween', 'checkoutPull', 'commitPatch', 'rangePatch', 'signature', 'signingConfig', 'setSigning',
+  'submodules', 'updateSubmodules', 'lfsInfo', 'lfsTrack', 'worktrees', 'addWorktree', 'removeWorktree', 'pruneWorktrees',
 ]);
 // Methods whose first argument is an options object that may receive onProgress.
-const PROGRESS_METHODS = new Set(['fetch', 'pull', 'push']);
+const PROGRESS_METHODS = new Set(['fetch', 'pull', 'push', 'updateSubmodules']);
 
 const STORE_KEYS = new Set(['settings', 'tabs', 'activeTab', 'layout', 'themes']);
 
@@ -54,6 +58,7 @@ let githubCli = null;
 let vault = null;
 const aiFetch = (url, init) => net.fetch(url, init);
 let updater = null;
+let github = null;
 const askpassWaiters = new Map();
 
 /** Show the renderer's sign-in dialog for a Git / SSH prompt. */
@@ -77,6 +82,7 @@ function askRenderer(req) {
   });
 }
 const repos = new Map();
+const knownWorktrees = new Set();
 const pendingOpen = [];
 
 function registerRepo(root) {
@@ -183,6 +189,9 @@ function createUpdater() {
     feedUrl: feed || undefined,
     offline: Boolean(process.env.GITDONKEY_OFFLINE) && !feed,
     bundle: updatableBundle(),
+    // Linux: an AppImage replaces itself; a .deb install is offered the next .deb.
+    appImage: process.platform === 'linux' && app.isPackaged ? process.env.APPIMAGE || null : null,
+    deb: process.platform === 'linux' && app.isPackaged && !process.env.APPIMAGE,
     packaged: app.isPackaged,
     firstCheck: Number(process.env.GITDONKEY_UPDATE_DELAY) || undefined,
     openPath: (p) => shell.openPath(p),
@@ -247,7 +256,7 @@ function buildMenu() {
         { role: 'paste' },
         { role: 'selectAll' },
         { type: 'separator' },
-        { label: 'Find Commits', accelerator: 'CmdOrCtrl+F', click: menuCommand('search') },
+        { label: 'Find', accelerator: 'CmdOrCtrl+F', click: menuCommand('search') },
         { label: 'Filter Branches', accelerator: 'CmdOrCtrl+Alt+F', click: menuCommand('filter') },
       ],
     },
@@ -259,6 +268,7 @@ function buildMenu() {
         { label: 'Push', accelerator: 'CmdOrCtrl+Shift+P', click: menuCommand('push') },
         { type: 'separator' },
         { label: 'Create Branch…', accelerator: 'CmdOrCtrl+B', click: menuCommand('branch') },
+        { label: 'New Worktree…', click: menuCommand('new-worktree') },
         { label: 'Stash', accelerator: 'CmdOrCtrl+Alt+S', click: menuCommand('stash') },
         { label: 'Pop Stash', accelerator: 'CmdOrCtrl+Alt+P', click: menuCommand('pop') },
         { type: 'separator' },
@@ -268,6 +278,10 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Undo Last Git Action', click: menuCommand('undo') },
         { label: 'Redo Git Action', click: menuCommand('redo') },
+        { label: 'Recover Lost Work…', click: menuCommand('recover') },
+        { type: 'separator' },
+        { label: 'Open Pull Request…', click: menuCommand('create-pr') },
+        { label: 'Connect GitHub…', click: menuCommand('connect-github') },
         { type: 'separator' },
         { label: 'Add Remote…', click: menuCommand('add-remote') },
         { label: 'Git Identity…', click: menuCommand('identity') },
@@ -277,6 +291,8 @@ function buildMenu() {
     {
       label: 'View',
       submenu: [
+        { label: 'Command Palette…', accelerator: 'CmdOrCtrl+P', click: menuCommand('palette') },
+        { type: 'separator' },
         { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+J', click: menuCommand('toggle-sidebar') },
         { label: 'Toggle Commit Panel', accelerator: 'CmdOrCtrl+K', click: menuCommand('toggle-panel') },
         { type: 'separator' },
@@ -321,7 +337,10 @@ function registerIpc() {
           onProgress: (p) => send('git:progress', { repo, method, ...p }),
         };
       }
-      return ok(await r[method](...callArgs));
+      const result = await r[method](...callArgs);
+      // Worktrees live outside the repository's folder; let Finder / Terminal open them.
+      if (method === 'worktrees') for (const w of result) knownWorktrees.add(w.path);
+      return ok(result);
     } catch (e) {
       return fail(e);
     }
@@ -424,7 +443,7 @@ function registerIpc() {
   const insideOpenRepo = (raw) => {
     if (typeof raw !== 'string' || !raw) return false;
     const p = path.resolve(raw);
-    return [...repos.keys()].some((root) => p === root || p.startsWith(root + path.sep));
+    return [...repos.keys(), ...knownWorktrees].some((root) => p === root || p.startsWith(root + path.sep));
   };
   ipcMain.handle('shell:openPath', async (_e, p) => (insideOpenRepo(p) ? shell.openPath(path.resolve(p)) : 'Not allowed'));
   ipcMain.handle('shell:showItem', (_e, p) => {
@@ -436,7 +455,7 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('shell:openTerminal', (_e, root) => {
-    if (!repos.has(root)) return false;
+    if (!repos.has(root) && !knownWorktrees.has(root)) return false;
     if (process.platform === 'darwin') spawn('open', ['-a', 'Terminal', root], { detached: true, stdio: 'ignore' }).unref();
     else if (process.platform === 'win32') spawn('cmd.exe', ['/c', 'start', 'cmd.exe'], { cwd: root, detached: true, stdio: 'ignore' }).unref();
     else spawn('x-terminal-emulator', [], { cwd: root, detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
@@ -458,6 +477,13 @@ function registerIpc() {
   });
   ipcMain.handle('credentials:status', async () => ({ helpers: await credentialHelpers(), github: githubCli }));
   ipcMain.handle('credentials:remember', () => enableCredentialHelper());
+  ipcMain.handle('signing:keys', () => signingKeys());
+  // A public key to paste into GitHub: only .pub files in ~/.ssh.
+  ipcMain.handle('signing:publicKey', async (_e, file) => {
+    const p = path.resolve(String(file || '').replace(/^~(?=\/)/, app.getPath('home')));
+    if (!p.endsWith('.pub') || path.dirname(p) !== path.join(app.getPath('home'), '.ssh')) return null;
+    return fs.promises.readFile(p, 'utf8').then((t) => t.trim()).catch(() => null);
+  });
   ipcMain.handle('avatar:clear', () => avatars.clear().then(() => true));
 
   // AI commit messages. Keys go in and never come back out to the renderer.
@@ -500,6 +526,89 @@ function registerIpc() {
       });
       const prompt = buildConflictPrompt({ path: file, operation, oursLabel, theirsLabel, conflicts: clean });
       return ok(await complete({ provider, key: vault.require(provider), model, baseUrl }, prompt, aiFetch, { maxTokens: 8192, timeout: 120000 }));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  // GitHub pull requests.
+  const githubFor = async (root) => {
+    const r = repos.get(root);
+    if (!r) throw new Error('Repository is not open');
+    const gh = githubRemote(await r.remotes());
+    if (!gh) throw Object.assign(new Error('This repository has no GitHub remote.'), { kind: 'GH_NONE' });
+    return gh;
+  };
+  ipcMain.handle('gh:status', async (_e, root) => {
+    try {
+      const r = repos.get(root);
+      const remote = r ? githubRemote(await r.remotes()) : null;
+      const auth = await github.auth();
+      return ok({ remote, signedIn: Boolean(auth), source: auth ? auth.source : null, gh: Boolean(githubCli), saved: vault.has('github') });
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('gh:pulls', async (_e, root) => {
+    try {
+      const gh = await githubFor(root);
+      return ok({ remote: gh.remote, ...(await github.pulls(gh)) });
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('gh:createPull', async (_e, { root, base, head, baseBranch, title, body, draft } = {}) => {
+    try {
+      const gh = await githubFor(root);
+      if (!base || typeof base.owner !== 'string' || typeof base.name !== 'string') throw new Error('Choose the repository to open it on.');
+      if (typeof head !== 'string' || !head || typeof baseBranch !== 'string' || !baseBranch) throw new Error('Choose the branches to compare.');
+      return ok(await github.createPull({ base, from: gh, head, baseBranch, title, body, draft }));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('gh:setToken', (_e, token) => {
+    try {
+      return ok(vault.set('github', token));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  // Reading changes with AI: explain a commit or a branch, write a pull request, review what's staged.
+  const aiRepo = (root) => {
+    const r = repos.get(root);
+    if (!r) throw new Error('Repository is not open');
+    return r;
+  };
+  const ai = ({ provider, model, baseUrl }) => ({ provider, key: vault.require(provider), model, baseUrl });
+  ipcMain.handle('ai:explain', async (_e, { repo, hash, base, head, ...cfg } = {}) => {
+    try {
+      const r = aiRepo(repo);
+      const material = hash ? await r.commitPatch(hash) : await r.rangePatch(base, head);
+      if (!hash && !material.range.commits.length) throw new AiError(`${head} has no commits that ${base} doesn’t.`, 'AI_NOTHING');
+      const text = await complete(ai(cfg), buildExplainPrompt(material), aiFetch, { maxTokens: 1500 });
+      return ok(String(text || '').trim());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('ai:describePull', async (_e, { repo, base, head, ...cfg } = {}) => {
+    try {
+      const m = await aiRepo(repo).rangePatch(base, head);
+      if (!m.range.commits.length) throw new AiError(`${head} has no commits that ${base} doesn’t.`, 'AI_NOTHING');
+      const text = await complete(ai(cfg), buildPullPrompt({ ...m.range, files: m.files, diff: m.diff, instructions: cfg.instructions }), aiFetch, { maxTokens: 2048 });
+      return ok(parsePullReply(text));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+  ipcMain.handle('ai:review', async (_e, { repo, ...cfg } = {}) => {
+    try {
+      const ctx = await aiRepo(repo).commitContext({ amend: false });
+      if (!ctx.files.length) throw new AiError('Stage some changes first, so there’s something to review.', 'AI_NOTHING');
+      const text = await complete(ai(cfg), buildReviewPrompt(ctx), aiFetch, { maxTokens: 4096, timeout: 120000 });
+      return ok({ ...parseReviewReply(text), files: ctx.files.length });
     } catch (e) {
       return fail(e);
     }
@@ -571,6 +680,13 @@ if (!gotLock) {
       if (gh) configureGit({ config: githubCliCredentialConfig(gh) });
     });
     createUpdater();
+    github = new GitHub({
+      fetch: (url, init) => net.fetch(url, init),
+      vault,
+      ghPath: () => githubCli,
+      api: process.env.GITDONKEY_GITHUB_API || undefined,
+      offline: Boolean(process.env.GITDONKEY_OFFLINE) && !process.env.GITDONKEY_GITHUB_API,
+    });
     watcher = new RepoWatcher((root) => send('repo:changed', { root }));
     avatars = new AvatarService(path.join(app.getPath('userData'), 'avatars'), (url, init) => net.fetch(url, init), { offline: Boolean(process.env.GITDONKEY_OFFLINE) });
     registerIpc();

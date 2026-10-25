@@ -25,6 +25,15 @@ const INSTALL_HINT = process.platform === 'win32'
     : 'Install Git with your package manager and try again.';
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
 
+// Snapshots: the working tree saved before something throws it away.
+const SNAPSHOT_REFS = 'refs/gitdonkey/snapshots/';
+const SNAPSHOT_KEEP = 60;
+const SNAPSHOT_MAX_FILE = 50 * 1024 * 1024;
+const SNAPSHOT_MAX_TOTAL = 400 * 1024 * 1024;
+// GitDonkey's own bookkeeping commits: never signed, never blocked on a missing identity.
+const SELF = { GIT_AUTHOR_NAME: 'GitDonkey', GIT_AUTHOR_EMAIL: 'snapshots@gitdonkey.local', GIT_COMMITTER_NAME: 'GitDonkey', GIT_COMMITTER_EMAIL: 'snapshots@gitdonkey.local' };
+const STASH_SUBJECT = /^(?:WIP on|On) [^:]+: /;
+
 // Set by the main process: the askpass bridge (env) and credential helpers (-c).
 let EXTRA_ENV = {};
 let EXTRA_CONFIG = [];
@@ -62,8 +71,10 @@ function classifyError(text) {
   if (/has no upstream branch|no tracking information/i.test(text)) return 'NO_UPSTREAM';
   if (/would be overwritten by|Please commit your changes or stash them|You have unstaged changes|Your index contains uncommitted changes/i.test(text)) return 'DIRTY_WORKTREE';
   if (/not fully merged/i.test(text)) return 'NOT_MERGED';
+  if (/is already (?:checked out|used by worktree) at/i.test(text)) return 'WORKTREE_BUSY';
   // Git refusing to touch the index while files are mid-conflict ("f: needs merge", "could not write index").
   if (/needs merge|you need to resolve your current index first|could not write index/i.test(text)) return 'UNMERGED';
+  if (/gpg failed to sign|failed to sign the data|error: (?:Couldn't|cannot) (?:load|sign)|signing failed|ssh-keygen.*(?:sign|key)|No such file or directory.*\.pub|failed to write commit object.*sign/i.test(text)) return 'SIGNING';
   if (/Authentication failed|could not read Username|Permission denied \(publickey|terminal prompts disabled|Host key verification failed/i.test(text)) return 'AUTH';
   if (/Not possible to fast-forward|not possible to fast-forward|Diverging branches can't be fast-forwarded/i.test(text)) return 'NOT_FF';
   if (/CONFLICT/.test(text)) return 'CONFLICT';
@@ -255,6 +266,8 @@ function parseStatus(out) {
     if (type === '1' || type === '2') {
       const parts = t.split(' ');
       const xy = parts[1];
+      // S<c><m><u>: a submodule, with new commits / changed files / untracked files.
+      const sub = parts[2] && parts[2][0] === 'S' ? { commits: parts[2][1] === 'C', changes: parts[2][2] === 'M', untracked: parts[2][3] === 'U' } : null;
       let p;
       let orig = null;
       if (type === '1') p = parts.slice(8).join(' ');
@@ -262,8 +275,8 @@ function parseStatus(out) {
         p = parts.slice(9).join(' ');
         orig = toks[++i];
       }
-      if (xy[0] !== '.') staged.push({ path: p, oldPath: orig, status: xy[0] });
-      if (xy[1] !== '.') unstaged.push({ path: p, oldPath: null, status: xy[1] });
+      if (xy[0] !== '.') staged.push({ path: p, oldPath: orig, status: xy[0], ...(sub ? { submodule: sub } : {}) });
+      if (xy[1] !== '.') unstaged.push({ path: p, oldPath: null, status: xy[1], ...(sub ? { submodule: sub } : {}) });
     } else if (type === 'u') {
       const parts = t.split(' ');
       conflicted.push({ path: parts.slice(10).join(' '), oldPath: null, status: 'U', conflict: parts[1] });
@@ -513,12 +526,28 @@ class GitRepo {
     };
   }
 
-  async log({ skip = 0, max = 1000 } = {}) {
-    const revs = ['--branches', '--remotes', '--tags'];
-    if (await this.hasHead()) revs.push('HEAD');
+  /**
+   * The graph's commits. By default every branch, remote branch and tag;
+   * `only` limits it to those refs, `hidden` leaves those branches out, and
+   * `remotes` / `tags` false leave remote branches / tags out.
+   */
+  async log({ skip = 0, max = 1000, only = null, hidden = [], remotes = true, tags = true } = {}) {
+    const refname = (r) => {
+      if (typeof r !== 'string' || !/^refs\/(heads|remotes|tags)\/[^\0\n\r]+$/.test(r)) throw new GitError(`Invalid ref: ${r}`);
+      return r;
+    };
+    const revs = [];
+    if (only && only.length) revs.push('--ignore-missing', ...only.map(refname));
+    else {
+      const hide = (prefix) => (hidden || []).map(refname).filter((r) => r.startsWith(prefix)).map((r) => `--exclude=${r.slice(prefix.length)}`);
+      revs.push(...hide('refs/heads/'), '--branches');
+      if (remotes) revs.push(...hide('refs/remotes/'), '--remotes');
+      if (tags) revs.push('--tags');
+      if (await this.hasHead()) revs.push('HEAD');
+    }
     const out = await this.text([
       'log', ...revs, '--date-order', '-z', `--max-count=${Number(max) | 0}`, `--skip=${Number(skip) | 0}`,
-      '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s',
+      '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s', '--',
     ]);
     return parseLog(out);
   }
@@ -632,6 +661,7 @@ class GitRepo {
     };
     const from = parents[0] || (await this.emptyTree());
     details.files = await this.changedFiles(from, details.hash);
+    details.signature = stash ? null : await this.signature(details.hash).catch(() => null);
     if (stash && parents[2]) {
       const untracked = await this.changedFiles(await this.emptyTree(), parents[2]);
       for (const u of untracked) {
@@ -641,6 +671,80 @@ class GitRepo {
       details.files.push(...untracked);
     }
     return details;
+  }
+
+  /** Whether a commit is signed, how, and whether this computer can vouch for it. */
+  async signature(hash) {
+    assertHash(hash);
+    const raw = await this.text(['cat-file', 'commit', hash]);
+    const header = raw.slice(0, raw.indexOf('\n\n') === -1 ? raw.length : raw.indexOf('\n\n'));
+    if (!/^gpgsig(?:-sha256)? /m.test(header)) return null;
+    const type = /BEGIN SSH SIGNATURE/.test(header) ? 'ssh' : /BEGIN SIGNED MESSAGE/.test(header) ? 'x509' : 'gpg';
+    const r = await this.run(['log', '-1', '--format=%G?%x1f%GS%x1f%GK', hash, '--'], { okCodes: [0, 1, 128] });
+    const [code = 'E', signer = '', key = ''] = r.stdout.trim().split(US);
+    // G: good, from a signer we trust. U: good, but the signer isn't one we know. E / N: can't check here.
+    const status = { G: 'verified', U: 'signed', X: 'expired', Y: 'expired', R: 'revoked', B: 'bad' }[code] || 'unverified';
+    return { type, status, signer: signer || null, key: key || null };
+  }
+
+  /** How commits are signed here: the settings Git will use in this repository. */
+  async signingConfig() {
+    const get = async (key, scope = []) => (await this.run(['config', ...scope, '--get', key], { okCodes: [0, 1] })).stdout.trim();
+    const [enabled, format, key, allowed, localEnabled] = await Promise.all([
+      get('commit.gpgsign'), get('gpg.format'), get('user.signingkey'), get('gpg.ssh.allowedSignersFile'), get('commit.gpgsign', ['--local']),
+    ]);
+    return {
+      enabled: /^(true|yes|on|1)$/i.test(enabled),
+      format: format === 'ssh' ? 'ssh' : format === 'x509' ? 'x509' : 'gpg',
+      key: key || null,
+      allowedSigners: allowed || null,
+      scope: localEnabled ? 'local' : 'global',
+    };
+  }
+
+  /**
+   * Turn signing on (with an SSH or GPG key) or off, for every repository or
+   * just this one. With SSH, your own key is added to the allowed signers so
+   * your commits show as verified here too.
+   */
+  async setSigning({ enabled, format = 'ssh', key = null, scope = 'global' } = {}) {
+    const where = scope === 'local' ? '--local' : '--global';
+    if (!enabled) {
+      await this.run(['config', where, 'commit.gpgsign', 'false']);
+      if (scope === 'global') await this.run(['config', '--local', '--unset', 'commit.gpgsign'], { okCodes: [0, 5] });
+      return this.signingConfig();
+    }
+    if (format !== 'ssh' && format !== 'gpg') throw new GitError('Choose SSH or GPG');
+    if (typeof key !== 'string' || !key.trim() || /[\0\n\r]/.test(key)) throw new GitError('Choose a key to sign with');
+    const k = key.trim();
+    if (format === 'ssh' && !k.startsWith('ssh-') && !k.startsWith('key::') && !fs.existsSync(k.replace(/^~(?=\/)/, os.homedir()))) throw new GitError(`There’s no key file at ${k}`);
+    await this.run(['config', where, 'gpg.format', format === 'ssh' ? 'ssh' : 'openpgp']);
+    await this.run(['config', where, 'user.signingkey', k]);
+    await this.run(['config', where, 'commit.gpgsign', 'true']);
+    if (format === 'ssh') await this.trustOwnSshKey(k, where).catch(() => {});
+    return this.signingConfig();
+  }
+
+  /** Add your own public key to the allowed signers file (made if needed), so Git can verify your commits. */
+  async trustOwnSshKey(key, where = '--global') {
+    const file = key.replace(/^~(?=\/)/, os.homedir());
+    const pub = key.startsWith('key::') ? key.slice(5) : key.startsWith('ssh-') ? key : (await fsp.readFile(file.endsWith('.pub') ? file : `${file}.pub`, 'utf8')).trim();
+    const email = (await this.run(['config', '--get', 'user.email'], { okCodes: [0, 1] })).stdout.trim();
+    if (!email || !pub) return;
+    let allowed = (await this.run(['config', '--get', 'gpg.ssh.allowedSignersFile'], { okCodes: [0, 1] })).stdout.trim();
+    if (!allowed) {
+      allowed = path.join(os.homedir(), '.ssh', 'allowed_signers');
+      await this.run(['config', where, 'gpg.ssh.allowedSignersFile', allowed]);
+    }
+    const target = allowed.replace(/^~(?=\/)/, os.homedir());
+    let existing = '';
+    try {
+      existing = await fsp.readFile(target, 'utf8');
+    } catch {}
+    const keyPart = pub.split(/\s+/).slice(0, 2).join(' ');
+    if (existing.includes(keyPart)) return;
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.appendFile(target, `${existing && !existing.endsWith('\n') ? '\n' : ''}${email} namespaces="git" ${keyPart}\n`, { mode: 0o644 });
   }
 
   async changedFiles(from, to) {
@@ -796,6 +900,57 @@ class GitRepo {
     return (await this.text(['log', '-1', '--format=%B', 'HEAD'])).replace(/\s+$/, '');
   }
 
+  async _diffText(args) {
+    try {
+      return (await this.run(['diff', '--no-color', '--no-ext-diff', '-M', '-U3', ...args, '--'], { maxBuffer: MAX_DIFF_BYTES })).stdout;
+    } catch (e) {
+      if (e.kind === 'TOO_LARGE') return '';
+      throw e;
+    }
+  }
+
+  /** A commit's message, files and diff (against its first parent), for the AI to read. */
+  async commitPatch(hash) {
+    const c = await this.commitDetails(hash);
+    const from = c.parents[0] || (await this.emptyTree());
+    return { commit: { author: c.author, subject: c.subject, body: c.body }, files: c.files, diff: await this._diffText([from, c.hash]) };
+  }
+
+  /** What `head` changes compared with `base` (from where they split), for the AI to read. */
+  async rangePatch(base, head) {
+    assertArg(base, 'base');
+    assertArg(head, 'head');
+    const [commits, ns, diff] = await Promise.all([
+      this.commitsBetween(base, head, { max: 60 }),
+      this.text(['diff', '--name-status', '-z', '-M', `${base}...${head}`, '--']),
+      this._diffText([`${base}...${head}`]),
+    ]);
+    return { range: { base, head, commits }, files: parseNameStatus(ns), diff };
+  }
+
+  /** Commits on `head` that `base` doesn't have, newest first. */
+  async commitsBetween(base, head, { max = 200 } = {}) {
+    assertArg(base, 'base');
+    assertArg(head, 'head');
+    return parseLog(await this.text(['log', '-z', `--max-count=${Number(max) | 0}`, '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s', `${base}..${head}`, '--']));
+  }
+
+  /** Fetch a pull request's head (from a fork too) into `localName`, and check it out. */
+  async checkoutPull(remote, number, localName) {
+    assertArg(remote, 'remote');
+    assertArg(localName, 'branch name');
+    if (!Number.isInteger(number) || number <= 0) throw new GitError('Invalid pull request number');
+    if (!(await this.validateBranchName(localName))) throw new GitError(`"${localName}" is not a valid branch name`);
+    await this.run(['fetch', '--progress', remote, `refs/pull/${number}/head`]);
+    const exists = await this.run(['show-ref', '--verify', '-q', `refs/heads/${localName}`], { okCodes: [0, 1] });
+    if (exists.code === 0) {
+      await this.run(['checkout', '-q', localName, '--']);
+      await this.run(['merge', '--ff-only', 'FETCH_HEAD']);
+    } else {
+      await this.run(['checkout', '-q', '-b', localName, 'FETCH_HEAD', '--']);
+    }
+  }
+
   async isAncestor(a, b) {
     assertArg(a, 'revision');
     assertArg(b, 'revision');
@@ -917,9 +1072,10 @@ class GitRepo {
 
   // ------------------------------------------------------------ commits
 
-  async commit({ message, amend = false, noVerify = false, messageOnly = false } = {}) {
+  async commit({ message, amend = false, noVerify = false, messageOnly = false, noSign = false } = {}) {
     if (typeof message !== 'string' || !message.trim()) throw new GitError('Commit message is required');
     const args = ['commit', '-q', '-F', '-', '--cleanup=strip'];
+    if (noSign) args.push('--no-gpg-sign');
     if (amend) args.push('--amend');
     // --only without paths: rewrite the message, ignore whatever is staged.
     if (amend && messageOnly) args.push('--only', '--allow-empty');
@@ -1204,6 +1360,359 @@ class GitRepo {
     await this.run(['stash', 'drop', ref]);
   }
 
+  /** Put a stash commit back on the stash list. */
+  async stashStore(hash, message) {
+    assertHash(hash);
+    await this.run(['stash', 'store', '-m', String(message || 'Restored stash').replace(/[\0\n\r]/g, ' '), hash]);
+  }
+
+  // ------------------------------------------------------------ worktrees
+
+  /** Every worktree of this repository, the main one first. */
+  async worktrees() {
+    const out = await this.text(['worktree', 'list', '--porcelain']);
+    const list = [];
+    let cur = null;
+    for (const line of out.split('\n')) {
+      if (!line) {
+        cur = null;
+        continue;
+      }
+      const sp = line.indexOf(' ');
+      const key = sp === -1 ? line : line.slice(0, sp);
+      const val = sp === -1 ? '' : line.slice(sp + 1);
+      if (key === 'worktree') {
+        cur = { path: path.resolve(val), head: null, branch: null, detached: false, bare: false, locked: false, prunable: false };
+        list.push(cur);
+      } else if (!cur) continue;
+      else if (key === 'HEAD') cur.head = val;
+      else if (key === 'branch') cur.branch = val.replace(/^refs\/heads\//, '');
+      else if (key === 'detached') cur.detached = true;
+      else if (key === 'bare') cur.bare = true;
+      else if (key === 'locked') cur.locked = val || true;
+      else if (key === 'prunable') cur.prunable = val || true;
+    }
+    return list.map((w, i) => ({ ...w, main: i === 0, current: w.path === this.root, exists: fs.existsSync(w.path) }));
+  }
+
+  /**
+   * A new worktree at `dir`: on an existing branch, on a new branch from
+   * `start`, or detached at `start`.
+   */
+  async addWorktree(dir, { branch = null, newBranch = null, start = 'HEAD' } = {}) {
+    if (typeof dir !== 'string' || !path.isAbsolute(dir) || /[\0\n\r]/.test(dir)) throw new GitError('Choose an absolute folder for the worktree');
+    if (fs.existsSync(dir) && (await fsp.readdir(dir)).length) throw new GitError(`${dir} already exists and isn’t empty`);
+    const args = ['worktree', 'add'];
+    if (newBranch) {
+      assertArg(newBranch, 'branch name');
+      if (!(await this.validateBranchName(newBranch))) throw new GitError(`"${newBranch}" is not a valid branch name`);
+      args.push('-b', newBranch, '--', dir, assertArg(start, 'start point'));
+    } else if (branch) args.push('--', dir, assertArg(branch, 'branch'));
+    else args.push('--detach', '--', dir, assertArg(start, 'start point'));
+    await this.run(args);
+    return path.resolve(dir);
+  }
+
+  async removeWorktree(dir, { force = false } = {}) {
+    const known = (await this.worktrees()).find((w) => w.path === path.resolve(String(dir)));
+    if (!known) throw new GitError('That folder isn’t one of this repository’s worktrees');
+    if (known.main) throw new GitError('The main worktree can’t be removed');
+    await this.run(['worktree', 'remove', ...(force ? ['--force'] : []), '--', known.path]);
+  }
+
+  async pruneWorktrees() {
+    await this.run(['worktree', 'prune']);
+  }
+
+  // ------------------------------------------------------------ submodules
+
+  /** Submodules from .gitmodules, with whether each is set up and at the commit this branch records. */
+  async submodules() {
+    const gm = path.join(this.root, '.gitmodules');
+    if (!fs.existsSync(gm)) return [];
+    const cfg = await this.run(['config', '-f', '.gitmodules', '--get-regexp', '^submodule\\..*\\.(path|url|branch)$'], { okCodes: [0, 1] });
+    const byName = new Map();
+    for (const line of cfg.stdout.split('\n')) {
+      const m = line.match(/^submodule\.(.+)\.(path|url|branch) (.*)$/);
+      if (!m) continue;
+      if (!byName.has(m[1])) byName.set(m[1], { name: m[1] });
+      byName.get(m[1])[m[2]] = m[3];
+    }
+    const st = await this.run(['submodule', 'status'], { okCodes: [0, 1, 128] });
+    const states = new Map();
+    for (const line of st.stdout.split('\n')) {
+      const m = line.match(/^([ +\-U])([0-9a-f]{40,64}) (.+?)(?: \((.*)\))?$/);
+      if (m) states.set(m[3], { sha: m[2], state: { ' ': 'ok', '+': 'moved', '-': 'missing', U: 'conflict' }[m[1]], describe: m[4] || null });
+    }
+    return [...byName.values()].filter((s) => s.path).map((s) => ({
+      name: s.name,
+      path: s.path,
+      url: s.url || null,
+      branch: s.branch || null,
+      ...(states.get(s.path) || { sha: null, state: 'missing', describe: null }),
+      root: path.join(this.root, s.path),
+    }));
+  }
+
+  /** Check submodules out at the commits this branch records (setting up any that aren't yet). */
+  async updateSubmodules({ paths = null, onProgress } = {}) {
+    if (paths !== null) assertPaths(paths);
+    await this.run(['submodule', 'update', '--init', '--recursive', '--progress', ...(paths && paths.length ? ['--', ...paths] : [])], { onProgress, literal: true });
+  }
+
+  // ------------------------------------------------------------ Git LFS
+
+  /** Whether this repository keeps files in Git LFS, which patterns, and whether Git LFS is installed. */
+  async lfsInfo() {
+    let attrs = '';
+    try {
+      attrs = await fsp.readFile(path.join(this.root, '.gitattributes'), 'utf8');
+    } catch {}
+    const patterns = attrs.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && /\bfilter=lfs\b/.test(l)).map((l) => l.split(/\s+/)[0]);
+    const v = await this.run(['lfs', 'version'], { okCodes: [0, 1, 128] }).catch(() => ({ code: 1, stdout: '' }));
+    return { used: patterns.length > 0, patterns, installed: v.code === 0, version: v.code === 0 ? v.stdout.trim() : null };
+  }
+
+  /** Keep files matching `pattern` in Git LFS from now on. */
+  async lfsTrack(pattern) {
+    if (typeof pattern !== 'string' || !pattern.trim() || /[\0\n\r]/.test(pattern) || pattern.startsWith('-')) throw new GitError('Invalid pattern');
+    const info = await this.lfsInfo();
+    if (!info.installed) {
+      const e = new GitError('Git LFS isn’t installed. Install it from git-lfs.com, then try again.');
+      e.kind = 'LFS_MISSING';
+      throw e;
+    }
+    await this.run(['lfs', 'install', '--local'], { okCodes: [0, 2] });
+    await this.run(['lfs', 'track', pattern.trim()]);
+  }
+
+  // ------------------------------------------------------------ snapshots & recovery
+
+  async _commitTree(tree, parents, message) {
+    const args = ['commit-tree', '--no-gpg-sign', tree, ...parents.flatMap((p) => ['-p', p])];
+    return (await this.text(args, { input: message, env: SELF })).trim();
+  }
+
+  /**
+   * Save uncommitted work, before something throws it away, as a stash-shaped
+   * commit (worktree, with the index and untracked files as parents) under
+   * refs/gitdonkey/snapshots/. `paths` limits it to those files. Returns
+   * { hash, ref, files } or null when there's nothing to save.
+   */
+  async snapshot(label, { paths = null, kind = 'discard' } = {}) {
+    if (paths !== null) assertPaths(paths);
+    const st = await this.status();
+    const want = paths ? new Set(paths) : null;
+    const pick = (list) => (want ? list.filter((f) => want.has(f.path) || (f.oldPath && want.has(f.oldPath))) : list);
+    const staged = pick(st.staged);
+    const changed = pick(st.unstaged.filter((f) => !f.untracked));
+    const conflicted = pick(st.conflicted);
+    let untracked = pick(st.unstaged.filter((f) => f.untracked)).map((f) => f.path);
+    const files = new Set([...staged, ...changed, ...conflicted].map((f) => f.path).concat(untracked)).size;
+    if (!files) return null;
+    const head = await this.headHash();
+    const gd = await this.gitDir();
+    const tmp = path.join(gd, `gitdonkey-snapshot-${process.pid}-${Date.now()}`);
+    const idx = (n) => ({ GIT_INDEX_FILE: `${tmp}-${n}` });
+    const realIndex = path.join(gd, 'index');
+    const skipped = [];
+    try {
+      // I: the index as it is (or HEAD plus just these files' staged versions).
+      const stage0 = async (only) => {
+        const out = await this.text(['ls-files', '-s', '-z', ...(only ? ['--', ...only] : [])], { literal: true });
+        return out.split('\0').filter((l) => l && / 0\t/.test(l));
+      };
+      let iTree;
+      if (!want && !conflicted.length) iTree = (await this.text(['write-tree'])).trim();
+      else {
+        if (head) await this.run(['read-tree', head], { env: idx('i') });
+        else await this.run(['read-tree', '--empty'], { env: idx('i') });
+        const entries = await stage0(want ? staged.map((f) => f.path) : null);
+        if (entries.length) await this.run(['update-index', '-z', '--index-info'], { env: idx('i'), input: `${entries.join('\0')}\0` });
+        // Staged deletions, and the old side of staged renames.
+        const removed = staged.flatMap((f) => [...(f.status === 'D' ? [f.path] : []), ...(f.oldPath ? [f.oldPath] : [])]);
+        if (removed.length) await this.run(['update-index', '-z', '--force-remove', '--stdin'], { env: idx('i'), input: `${removed.join('\0')}\0` });
+        iTree = (await this.text(['write-tree'], { env: idx('i') })).trim();
+      }
+      // W: tracked files as they are on disk.
+      const base = !want && !conflicted.length ? realIndex : `${tmp}-i`;
+      if (fs.existsSync(base)) await fsp.copyFile(base, `${tmp}-w`);
+      const trackedPaths = [...new Set([...staged, ...changed, ...conflicted].flatMap((f) => [f.path, ...(f.oldPath ? [f.oldPath] : [])]))];
+      const onDisk = trackedPaths.filter((p) => fs.existsSync(this.resolvePath(p)));
+      const gone = trackedPaths.filter((p) => !onDisk.includes(p));
+      if (onDisk.length) await this.run(['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], { env: idx('w'), input: onDisk.join('\0'), literal: true });
+      if (gone.length) await this.run(['update-index', '-z', '--force-remove', '--stdin'], { env: idx('w'), input: `${gone.join('\0')}\0` });
+      const wTree = (await this.text(['write-tree'], { env: idx('w') })).trim();
+      // U: untracked files, leaving out any too big to keep a copy of.
+      let total = 0;
+      untracked = untracked.filter((p) => {
+        let size = 0;
+        try {
+          size = fs.statSync(this.resolvePath(p)).size;
+        } catch {
+          return false;
+        }
+        if (size > SNAPSHOT_MAX_FILE || total + size > SNAPSHOT_MAX_TOTAL) {
+          skipped.push(p);
+          return false;
+        }
+        total += size;
+        return true;
+      });
+      let uCommit = null;
+      if (untracked.length) {
+        await this.run(['add', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'], { env: idx('u'), input: untracked.join('\0'), literal: true });
+        const uTree = (await this.text(['write-tree'], { env: idx('u') })).trim();
+        uCommit = await this._commitTree(uTree, [], 'untracked files');
+      }
+      const branch = (await this.run(['symbolic-ref', '-q', '--short', 'HEAD'], { okCodes: [0, 1, 128] })).stdout.trim() || '(no branch)';
+      const iCommit = await this._commitTree(iTree, head ? [head] : [], `index on ${branch}`);
+      const body = [`files: ${files}`, `kind: ${kind}`, `branch: ${branch}`, ...(skipped.length ? [`skipped: ${skipped.join(', ')}`] : [])].join('\n');
+      const subject = `On ${branch}: GitDonkey: ${String(label || 'snapshot').replace(/[\n\r]/g, ' ')}`;
+      const hash = await this._commitTree(wTree, [...(head ? [head] : []), iCommit, ...(uCommit ? [uCommit] : [])], `${subject}\n\n${body}\n`);
+      const ref = `${SNAPSHOT_REFS}${Date.now()}-${hash.slice(0, 8)}`;
+      await this.run(['update-ref', ref, hash]);
+      await this.pruneSnapshots();
+      return { hash, ref, files, skipped };
+    } finally {
+      for (const n of ['i', 'w', 'u']) await fsp.rm(`${tmp}-${n}`, { force: true }).catch(() => {});
+    }
+  }
+
+  /** Keep a stash's commit as a snapshot before it's dropped. */
+  async keepStash(ref) {
+    assertStash(ref);
+    const hash = (await this.text(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
+    const keep = `${SNAPSHOT_REFS}${Date.now()}-${hash.slice(0, 8)}`;
+    await this.run(['update-ref', keep, hash]);
+    await this.pruneSnapshots();
+    return { hash, ref: keep };
+  }
+
+  async pruneSnapshots() {
+    const list = await this.snapshots();
+    for (const s of list.slice(SNAPSHOT_KEEP)) await this.run(['update-ref', '-d', s.ref], { okCodes: [0, 1] });
+  }
+
+  async snapshots() {
+    const fmt = ['%(refname)', '%(objectname)', '%(creatordate:unix)', '%(contents)'].join('%1f');
+    const out = await this.text(['for-each-ref', '--sort=-refname', `--format=${fmt}%1e`, SNAPSHOT_REFS]);
+    return out.split(RS).map((r) => r.replace(/^\n/, '')).filter(Boolean).map((rec) => {
+      const [ref, hash, date, contents = ''] = rec.split(US);
+      const lines = contents.split('\n');
+      const meta = Object.fromEntries(lines.slice(1).map((l) => l.match(/^(\w+): (.*)$/)).filter(Boolean).map((m) => [m[1], m[2]]));
+      const subject = lines[0] || '';
+      const ours = subject.match(/^On ([^:]+): GitDonkey: (.*)$/);
+      const stash = !ours && subject.match(/^(?:WIP on|On) ([^:]+): ?(.*)$/);
+      return {
+        ref,
+        hash,
+        subject,
+        date: Number(date) * 1000,
+        label: ours ? ours[2] : stash ? `Dropped stash: ${stash[2] || subject}` : subject,
+        branch: ours ? ours[1] : stash ? stash[1] : meta.branch || null,
+        kind: ours ? meta.kind || 'discard' : 'stash',
+        files: meta.files ? Number(meta.files) : null,
+        skipped: meta.skipped ? meta.skipped.split(', ') : [],
+      };
+    });
+  }
+
+  async deleteSnapshot(ref) {
+    if (typeof ref !== 'string' || !ref.startsWith(SNAPSHOT_REFS) || /[\0\n\r\s]/.test(ref)) throw new GitError('Invalid snapshot');
+    await this.run(['update-ref', '-d', ref]);
+  }
+
+  /** Put a snapshot (or any stash-shaped commit) back into the working tree. */
+  async restoreSnapshot(hash) {
+    assertHash(hash);
+    if (!(await this.hasHead())) {
+      // No commit yet, so no stash: write the files back (tracked ones staged, untracked ones not).
+      const parents = (await this.text(['rev-list', '--parents', '-n', '1', hash])).trim().split(' ').slice(1);
+      const files = async (rev) => (await this.text(['ls-tree', '-r', '-z', '--name-only', rev])).split('\0').filter(Boolean);
+      if ((await files(hash)).length) await this.run(['checkout', hash, '--', '.']);
+      const u = parents[1];
+      const loose = u ? await files(u) : [];
+      if (loose.length) {
+        await this.run(['checkout', u, '--', '.']);
+        await this.run(['rm', '--cached', '-q', '--pathspec-from-file=-', '--pathspec-file-nul'], { input: loose.join('\0'), literal: true });
+      }
+      return { conflicts: false };
+    }
+    try {
+      return await this._withConflicts(['stash', 'apply', '--index', hash]);
+    } catch (e) {
+      // The staged part didn't apply cleanly on top of what's staged now: bring the files back unstaged.
+      if (/Conflicts in index|could not restore|patch does not apply|Try without --index/i.test(`${e.message}\n${e.stderr || ''}`)) {
+        return this._withConflicts(['stash', 'apply', hash]);
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Commits HEAD was on that no branch, tag or remote branch reaches any more
+   * (after a hard reset, a rebase, or deleting a branch you'd checked out),
+   * newest first, with what moved HEAD away from each.
+   */
+  async lostCommits({ max = 400 } = {}) {
+    if (!(await this.hasHead())) return [];
+    const r = await this.run(['reflog', 'show', '-z', `-n${Number(max) | 0}`, '--format=%H%x1f%gs%x1f%ct', 'HEAD', '--'], { okCodes: [0, 128] });
+    if (r.code !== 0) return [];
+    const entries = r.stdout.split('\0').filter(Boolean).map((e) => {
+      const [hash, action, ct] = e.split(US);
+      return { hash, action, date: Number(ct) * 1000 };
+    });
+    const candidates = [...new Set(entries.map((e) => e.hash))];
+    if (!candidates.length) return [];
+    return this._lostTips(candidates, (tip) => {
+      const k = entries.findIndex((e) => e.hash === tip);
+      const away = k > 0 ? entries[k - 1] : null;
+      return away ? { lostBy: away.action, lostAt: away.date } : {};
+    });
+  }
+
+  /** Of these commits, the ones nothing reaches, as tips with how many commits hang off each. */
+  async _lostTips(candidates, describe) {
+    const out = await this.text(['rev-list', '--parents', '--max-count=5000', '--ignore-missing', '--stdin', '--not', '--branches', '--tags', '--remotes', '--glob=refs/stash'], { input: `${candidates.join('\n')}\n`, okCodes: [0] })
+      .catch(() => '');
+    const parentsOf = new Map();
+    for (const line of out.split('\n')) {
+      if (!line) continue;
+      const [c, ...ps] = line.split(' ');
+      parentsOf.set(c, ps);
+    }
+    const isParent = new Set([...parentsOf.values()].flat());
+    const tips = candidates.filter((c) => parentsOf.has(c) && !isParent.has(c));
+    if (!tips.length) return [];
+    const count = (tip) => {
+      const seen = new Set();
+      const stack = [tip];
+      while (stack.length) {
+        const c = stack.pop();
+        if (seen.has(c) || !parentsOf.has(c)) continue;
+        seen.add(c);
+        stack.push(...parentsOf.get(c));
+      }
+      return seen.size;
+    };
+    const info = parseLog(await this.text(['log', '--no-walk=unsorted', '--ignore-missing', '-z', '--stdin', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s'], { input: `${tips.join('\n')}\n` }));
+    return info.map((c) => ({ ...c, commits: count(c.hash), stashLike: c.parents.length >= 2 && STASH_SUBJECT.test(c.subject), ...describe(c.hash) }))
+      .sort((a, b) => (b.lostAt || b.date) - (a.lostAt || a.date));
+  }
+
+  /** A slower, deeper look (git fsck): commits nothing points to, including dropped stashes. */
+  async danglingCommits() {
+    const r = await this.run(['fsck', '--no-reflogs', '--no-progress', '--dangling'], { okCodes: [0, 1, 2, 3, 4, 5, 6, 7], maxBuffer: 64 * 1024 * 1024 });
+    const hashes = [...`${r.stdout}\n${r.stderr}`.matchAll(/^dangling commit ([0-9a-f]{40,64})$/gm)].map((m) => m[1]);
+    if (!hashes.length) return [];
+    const info = parseLog(await this.text(['log', '--no-walk=unsorted', '-z', '--stdin', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%ct%x1f%s'], { input: `${hashes.slice(0, 500).join('\n')}\n` }));
+    // Our own snapshot pieces (index / untracked commits) are reachable; anything with our identity left over isn't interesting.
+    return info.filter((c) => c.email !== SELF.GIT_AUTHOR_EMAIL || STASH_SUBJECT.test(c.subject))
+      .map((c) => ({ ...c, commits: 1, stashLike: c.parents.length >= 2 && STASH_SUBJECT.test(c.subject) }))
+      .sort((a, b) => b.date - a.date);
+  }
+
   // ------------------------------------------------------------ remotes
 
   async fetch({ remote = null, prune = true, onProgress } = {}) {
@@ -1305,6 +1814,46 @@ async function cloneRepo(url, dest, { onProgress } = {}) {
   return (await resolveRoot(dest)) || dest;
 }
 
+/** Keys this computer could sign commits with: SSH public keys, and GPG secret keys when gpg is installed. */
+async function signingKeys() {
+  const ssh = [];
+  const dir = path.join(os.homedir(), '.ssh');
+  try {
+    for (const f of (await fsp.readdir(dir)).filter((n) => n.endsWith('.pub')).sort()) {
+      const text = (await fsp.readFile(path.join(dir, f), 'utf8')).trim();
+      const [type, , ...comment] = text.split(/\s+/);
+      if (/^(ssh-|ecdsa-|sk-)/.test(type || '')) ssh.push({ path: path.join(dir, f), type, comment: comment.join(' ') });
+    }
+  } catch {}
+  const gpg = [];
+  const exe = [...(process.env.PATH || '').split(path.delimiter), ...EXTRA_PATHS, '/opt/homebrew/bin', '/usr/local/bin', '/usr/local/MacGPG2/bin']
+    .map((d) => path.join(d, process.platform === 'win32' ? 'gpg.exe' : 'gpg')).find((p) => p && fs.existsSync(p));
+  if (exe) {
+    const out = await new Promise((resolve) => {
+      let buf = '';
+      const child = spawn(exe, ['--list-secret-keys', '--with-colons'], { env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
+      const timer = setTimeout(() => child.kill(), 6000);
+      child.stdout.on('data', (d) => {
+        buf += d;
+      });
+      child.on('error', () => resolve(''));
+      child.on('close', () => {
+        clearTimeout(timer);
+        resolve(buf);
+      });
+    });
+    let cur = null;
+    for (const line of out.split('\n')) {
+      const f = line.split(':');
+      if (f[0] === 'sec') {
+        cur = { id: f[4], uid: '' };
+        gpg.push(cur);
+      } else if (f[0] === 'uid' && cur && !cur.uid) cur.uid = f[9];
+    }
+  }
+  return { ssh, gpg, gpgInstalled: Boolean(exe) };
+}
+
 /** Path of an authenticated GitHub CLI, or null. */
 async function detectGitHubCli() {
   const names = process.platform === 'win32' ? ['gh.exe'] : ['gh'];
@@ -1358,6 +1907,7 @@ module.exports = {
   enableCredentialHelper,
   GitRepo,
   GitError,
+  signingKeys,
   runGit,
   resolveRoot,
   initRepo,
@@ -1369,4 +1919,5 @@ module.exports = {
   parseBlame,
   cleanMessage,
   classifyError,
+  SNAPSHOT_REFS,
 };

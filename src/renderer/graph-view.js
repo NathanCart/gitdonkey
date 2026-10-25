@@ -3,6 +3,7 @@ import { h, icon, clear, avatar, legend } from './dom.js';
 import { shortHash, relativeTime, fullDate } from './lib/util.js';
 import { kb } from './api.js';
 import { avatarImage } from './avatars.js';
+import { pullTag } from './pulls.js';
 
 export const ROW_H = 28;
 const LANE_W = 17;
@@ -25,14 +26,16 @@ export class GraphView {
   }
 
   build() {
+    this.filterBtn = h('button', { class: 'icon-btn gh-filter', title: 'Filter the graph: branches, remote branches, tags, an author', 'aria-label': 'Filter the graph', onClick: (e) => this.app.graphFilterMenu(e.currentTarget) }, icon('list-filter', { size: 13 }));
     this.header = h('div', { class: 'graph-head' },
-      h('div', { class: 'gh-cell gh-refs' }, legend('Branch / Tag'), h('div', { class: 'col-resize', title: 'Drag to resize', onMousedown: (e) => this.startResize(e) })),
+      h('div', { class: 'gh-cell gh-refs' }, legend('Branch / Tag'), this.filterBtn, h('div', { class: 'col-resize', title: 'Drag to resize', onMousedown: (e) => this.startResize(e) })),
       h('div', { class: 'gh-cell gh-graph' }, legend('Graph')),
       h('div', { class: 'gh-cell gh-msg' }, legend('Commit message')),
       h('div', { class: 'gh-cell gh-author' }, legend('Author')),
       h('div', { class: 'gh-cell gh-date' }, legend('Date')),
       h('div', { class: 'gh-cell gh-sha' }, legend('SHA')));
     this.searchBar = h('div', { class: 'graph-search', hidden: true });
+    this.filterBar = h('div', { class: 'graph-filterbar', hidden: true });
     this.scroller = h('div', { class: 'graph-scroll', tabindex: '0', 'aria-label': 'Commit graph' });
     this.spacer = h('div', { class: 'graph-spacer' });
     this.win = h('div', { class: 'graph-window' });
@@ -42,7 +45,7 @@ export class GraphView {
     this.spacer.appendChild(this.win);
     this.scroller.appendChild(this.spacer);
     this.empty = h('div', { class: 'graph-empty', hidden: true });
-    this.el.append(this.header, this.searchBar, this.scroller, this.empty);
+    this.el.append(this.header, this.filterBar, this.searchBar, this.scroller, this.empty);
 
     this.scroller.addEventListener('scroll', () => this.update());
     new ResizeObserver(() => this.update(true)).observe(this.scroller);
@@ -127,6 +130,24 @@ export class GraphView {
     this.draw();
   }
 
+  /** What the graph is filtered to (words for the bar, or null), and whose commits to dim. */
+  setFilter(words, dim) {
+    this.dimFn = dim;
+    this.filterBtn.classList.toggle('on', Boolean(words));
+    this.filterBar.hidden = !words;
+    if (!words) return;
+    clear(this.filterBar).append(
+      icon('list-filter', { size: 13 }),
+      h('span', { class: 'gf-text' }, words.join(' · ')),
+      h('button', { class: 'btn btn-tiny', onClick: (e) => this.app.graphFilterMenu(e.currentTarget) }, 'Change'),
+      h('button', { class: 'btn btn-tiny', onClick: () => this.app.clearGraphFilter() }, 'Show everything'));
+  }
+
+  dimmed(i) {
+    const c = this.rows[i];
+    return Boolean((this.matchSet && !this.matchSet.has(i)) || (this.dimFn && c && !c.wip && this.dimFn(c)));
+  }
+
   setMatches(set) {
     this.matchSet = set;
     this.update(true);
@@ -165,9 +186,9 @@ export class GraphView {
     const c = this.rows[i];
     const L = this.layout.rows[i];
     const refs = this.refsByHash.get(c.hash) || [];
-    const dim = this.matchSet && !this.matchSet.has(i);
+    const dim = this.dimmed(i);
     const row = h('div', {
-      class: ['g-row', c.wip && 'g-wip', i === this.selectedIndex && 'selected', dim && 'dim', this.matchSet && !dim && 'match'],
+      class: ['g-row', c.wip && 'g-wip', i === this.selectedIndex && 'selected', dim && 'dim', (this.matchSet || this.dimFn) && !dim && !c.wip && 'match'],
       role: 'listitem',
       dataset: { i: String(i) },
       style: { '--lane': L.color },
@@ -225,7 +246,7 @@ export class GraphView {
     const n = this.rows.length;
     const caseColor = getComputedStyle(document.documentElement).getPropertyValue('--case').trim() || '#0b0c0e';
     const boneColor = getComputedStyle(document.documentElement).getPropertyValue('--legend').trim() || '#ece8df';
-    const alphaFor = (r) => (this.matchSet && !this.matchSet.has(r) ? 0.28 : 1);
+    const alphaFor = (r) => (this.dimmed(r) ? 0.28 : 1);
 
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -433,11 +454,32 @@ export function plugEl(ref, idx, color) {
   else el.appendChild(h('span', { class: 'plug-jack' }));
   el.appendChild(h('span', { class: 'plug-name' }, ref.name));
   if (ref.type === 'local' && ref.remotes && ref.remotes.length) el.appendChild(h('span', { class: 'plug-sync', title: `In sync with ${ref.remotes.join(', ')}` }, icon('cloud', { size: 11 })));
+  if (ref.pr) el.appendChild(pullTag(ref.pr));
+  if (ref.worktree) el.appendChild(h('span', { class: 'plug-wt', title: `Checked out in the worktree ${ref.worktree.path}` }, icon('folder-tree', { size: 11 })));
+  const b = ref.type === 'local' ? ref.branch : null;
+  if (b && (b.ahead || b.behind)) {
+    el.classList.toggle('diverged', Boolean(b.ahead && b.behind));
+    el.appendChild(h('span', { class: 'plug-ab' }, b.ahead ? h('span', { class: 'ab ahead' }, `↑${b.ahead}`) : null, b.behind ? h('span', { class: 'ab behind' }, `↓${b.behind}`) : null));
+  }
   return el;
 }
 
+/** How a branch stands against the branch it tracks, in words. */
+export function syncText(b) {
+  if (!b || !b.upstream) return '';
+  if (b.gone) return `${b.upstream} no longer exists on the remote`;
+  if (b.ahead && b.behind) return `Split from ${b.upstream}: ${b.ahead} commit${b.ahead === 1 ? '' : 's'} to push, ${b.behind} to pull`;
+  if (b.ahead) return `${b.ahead} commit${b.ahead === 1 ? '' : 's'} to push to ${b.upstream}`;
+  if (b.behind) return `${b.behind} commit${b.behind === 1 ? '' : 's'} to pull from ${b.upstream}`;
+  return `In sync with ${b.upstream}`;
+}
+
 function plugTitle(ref) {
-  if (ref.type === 'local') return `${ref.isHead ? 'Current branch' : 'Local branch'} ${ref.name}${ref.remotes?.length ? ` (also ${ref.remotes.join(', ')})` : ''}\nDouble-click to check out · drag onto another branch to merge or rebase`;
+  if (ref.type === 'local') {
+    const sync = ref.branch && (ref.branch.ahead || ref.branch.behind || ref.branch.gone) ? `\n${syncText(ref.branch)}` : '';
+    const where = ref.worktree ? `\nChecked out in the worktree ${ref.worktree.path} · double-click to open it` : '\nDouble-click to check out';
+    return `${ref.isHead ? 'Current branch' : 'Local branch'} ${ref.name}${ref.remotes?.length ? ` (also ${ref.remotes.join(', ')})` : ''}${sync}${where} · drag onto another branch to merge or rebase`;
+  }
   if (ref.type === 'remote') return `Remote branch ${ref.name}\nDouble-click to check out · drag onto a branch to merge`;
   if (ref.type === 'tag') return `Tag ${ref.name}${ref.tag?.message ? `\n${ref.tag.message}` : ''}`;
   return 'Detached HEAD';

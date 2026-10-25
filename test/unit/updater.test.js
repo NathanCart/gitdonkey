@@ -94,6 +94,11 @@ test('release assets: the right build for each platform and CPU', () => {
   assert.equal(assetFor(assets, 'win32', 'x64').name, 'GitDonkey-Setup-1.1.0-x64.exe');
   assert.equal(assetFor(assets, 'win32', 'arm64').name, 'GitDonkey-Setup-1.1.0-x64.exe', 'Windows on Arm runs the x64 build');
   assert.equal(assetFor(assets, 'linux', 'x64'), null);
+  const linux = ['GitDonkey-1.5.0-linux-x86_64.AppImage', 'GitDonkey-1.5.0-linux-arm64.AppImage', 'GitDonkey-1.5.0-linux-amd64.deb', 'GitDonkey-1.5.0-linux-arm64.deb'].map((name) => ({ name }));
+  assert.equal(assetFor(linux, 'linux', 'x64').name, 'GitDonkey-1.5.0-linux-x86_64.AppImage');
+  assert.equal(assetFor(linux, 'linux', 'arm64').name, 'GitDonkey-1.5.0-linux-arm64.AppImage');
+  assert.equal(assetFor(linux, 'linux', 'x64', { deb: true }).name, 'GitDonkey-1.5.0-linux-amd64.deb');
+  assert.equal(assetFor(linux, 'linux', 'arm64', { deb: true }).name, 'GitDonkey-1.5.0-linux-arm64.deb');
 });
 
 test('releases: drafts and pre-releases are ignored, digests and notes kept', () => {
@@ -330,6 +335,35 @@ test('install: falls back to opening the installer when it can’t replace the a
   const stuck = await readyUpdater({ platform: 'darwin', openPath: async () => 'No application knows how to open it' });
   await assert.rejects(stuck.install(), { kind: 'UPDATE_INSTALL', message: /No application/ });
   assert.equal(stuck.state().error, 'No application knows how to open it');
+});
+
+test('install: an AppImage replaces itself and relaunches; a .deb install opens the new package', { skip: process.platform === 'win32' }, async () => {
+  const name = 'GitDonkey-1.1.0-linux-x86_64.AppImage';
+  const next = Buffer.from('#!/bin/sh\necho new\n');
+  const appDir = tmp('appimage');
+  const current = path.join(appDir, 'GitDonkey.AppImage');
+  fs.writeFileSync(current, '#!/bin/sh\necho old\n', { mode: 0o755 });
+  let quit = 0;
+  const feed = { [FEED]: response(200, releaseJson('1.1.0', { [name]: next, 'GitDonkey-1.1.0-linux-amd64.deb': Buffer.from('deb') })), [`https://dl.example.test/${name}`]: () => response(200, next), 'https://dl.example.test/GitDonkey-1.1.0-linux-amd64.deb': () => response(200, Buffer.from('deb')) };
+  const u = makeUpdater({ platform: 'linux', arch: 'x64', appImage: current, packaged: true, fetch: fakeFetch(feed).fetch, quit: () => { quit++; } });
+  await u.check();
+  assert.equal(u.asset.name, name);
+  assert.equal(u.installKind(), 'appimage');
+  await u.download();
+  assert.deepEqual(await u.install(), { done: 'restarting' });
+  assert.equal(quit, 1);
+  assert.equal(fs.readFileSync(current, 'utf8'), next.toString());
+  assert.equal(fs.statSync(current).mode & 0o111, 0o111, 'still executable');
+  assert.deepEqual(fs.readdirSync(appDir), ['GitDonkey.AppImage']);
+
+  const opened = [];
+  const d = makeUpdater({ platform: 'linux', arch: 'x64', deb: true, packaged: true, fetch: fakeFetch(feed).fetch, openPath: async (p) => { opened.push(p); return ''; } });
+  await d.check();
+  assert.equal(d.asset.name, 'GitDonkey-1.1.0-linux-amd64.deb');
+  assert.equal(d.installKind(), 'open');
+  await d.download();
+  assert.equal((await d.install()).done, 'opened');
+  assert.deepEqual(opened, [d.file]);
 });
 
 test('replace problems: translocated, read-only and non-bundle paths', async () => {
