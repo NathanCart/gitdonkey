@@ -2018,6 +2018,12 @@ class App {
         return;
       }
       if (hasOpenModal()) return;
+      // ⌥↓ / ⌥↑ (and F7 / ⇧F7): next / previous change in the open diff.
+      if (this.detail.isOpen() && !inText && ((e.altKey && !meta && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) || e.key === 'F7')) {
+        e.preventDefault();
+        this.detail.gotoChange(e.key === 'ArrowUp' || (e.key === 'F7' && e.shiftKey) ? -1 : 1);
+        return;
+      }
       if (meta && !inText && !e.altKey && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) this.redo();

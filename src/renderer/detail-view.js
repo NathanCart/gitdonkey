@@ -4,7 +4,7 @@ import { h, icon, clear, legend, statusBadge, avatar, authorColor, led } from '.
 import { parseDiff, buildPatch, splitRows } from './lib/diff-parse.js';
 import { parseConflicts, resolveConflicts, conflictCount, conflictContext, parseResolutionReply } from './lib/conflicts.js';
 import { splitPath, languageFor, imageMime, shortHash, relativeTime, fullDate, pluralize } from './lib/util.js';
-import { git, invoke } from './api.js';
+import { git, invoke, kb } from './api.js';
 import { confirmDialog } from './ui.js';
 import { aiSettingsDialog } from './dialogs.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
@@ -23,7 +23,14 @@ export class DetailView {
     this.head = h('div', { class: 'detail-head' });
     this.body = h('div', { class: 'detail-body' });
     this.selBar = h('div', { class: 'sel-bar', hidden: true });
-    this.el.append(this.head, this.body, this.selBar);
+    // A map of where the changes are, beside the diff: click a mark to jump there.
+    this.ruler = h('div', { class: 'change-ruler', hidden: true, title: 'Changes in this file. Click to jump.', onMousedown: (e) => this.onRuler(e) });
+    this.main = h('div', { class: 'detail-main' }, this.body, this.ruler);
+    this.el.append(this.head, this.main, this.selBar);
+    this.changes = [];
+    this.nav = null;
+    this.body.addEventListener('scroll', () => this.onScroll(), { passive: true });
+    new ResizeObserver(() => this.layoutRuler()).observe(this.body);
     this.el.hidden = true;
     this.lineSel = new Map();
     this.lastSel = null;
@@ -94,6 +101,15 @@ export class DetailView {
     ].filter(([, , show]) => show);
     const st = this.app.settings;
     const right = [];
+    this.nav = null;
+    if (this.mode === 'diff') {
+      const prev = h('button', { class: 'seg-btn', title: `Previous change (${kb('⌥↑')})`, 'aria-label': 'Previous change', onClick: () => this.gotoChange(-1) }, icon('chevron-up', { size: 14 }));
+      const next = h('button', { class: 'seg-btn', title: `Next change (${kb('⌥↓')})`, 'aria-label': 'Next change', onClick: () => this.gotoChange(1) }, icon('chevron-down', { size: 14 }));
+      const count = h('span', { class: 'change-count', 'aria-live': 'polite' });
+      const group = h('div', { class: 'seg change-nav', role: 'group', 'aria-label': 'Changes', hidden: true }, prev, count, next);
+      this.nav = { group, prev, next, count };
+      right.push(group);
+    }
     if (this.mode === 'diff' || this.mode === 'history') {
       right.push(h('div', { class: 'seg', role: 'group', 'aria-label': 'Diff layout' },
         h('button', { class: ['seg-btn', st.diffMode !== 'split' && 'on'], title: 'Unified diff', onClick: () => this.app.setSetting('diffMode', 'unified') }, icon('list', { size: 14 }), 'Unified'),
@@ -136,6 +152,7 @@ export class DetailView {
         }, label))),
         h('span', { class: 'spacer' }),
         right));
+    this.updateNav();
   }
 
   // ------------------------------------------------------------ loading
@@ -143,6 +160,7 @@ export class DetailView {
   async load({ quiet = false } = {}) {
     const token = ++this.token;
     const s = this.spec;
+    if (!quiet || this.mode !== 'diff') this.indexChanges(false);
     if (!quiet) clear(this.body).appendChild(h('div', { class: 'detail-loading' }, h('div', { class: 'skel w60' }), h('div', { class: 'skel w80' }), h('div', { class: 'skel w40' })));
     try {
       if (this.mode === 'diff') await this.loadDiff(token, s, { quiet });
@@ -172,6 +190,7 @@ export class DetailView {
     this.lineSel = new Map();
     this.updateSelBar();
     clear(this.body);
+    this.indexChanges(false);
     if (res.tooLarge) {
       this.body.appendChild(this.message('This diff is too large to show', 'Open the file in your editor to review it.', [{ label: 'Open file', run: () => this.app.openExternal(s.path) }]));
       return;
@@ -190,6 +209,151 @@ export class DetailView {
     this.file = file;
     this.renderDiff(file, s);
     if (quiet) this.body.scrollTop = scroll;
+    this.indexChanges();
+    // The whole file is long; start where something changed.
+    if (!quiet && this.app.settings.diffContext === 'full' && this.changes.length) this.scrollToChange(0, { smooth: false });
+  }
+
+  // ------------------------------------------------------------ finding changes
+
+  /** Group the rendered diff into changes: runs of added or removed lines within a hunk. */
+  indexChanges(scan = true) {
+    this.changes = [];
+    const wrap = scan && this.mode === 'diff' ? this.body.querySelector('.diff') : null;
+    if (wrap) {
+      let cur = null;
+      let hunk = null;
+      for (const row of wrap.querySelectorAll('.dl')) {
+        if (row.parentElement !== hunk) {
+          hunk = row.parentElement;
+          cur = null;
+        }
+        const add = row.classList.contains('add') || Boolean(row.querySelector('.half.add'));
+        const del = row.classList.contains('del') || Boolean(row.querySelector('.half.del'));
+        if (!add && !del) {
+          cur = null;
+          continue;
+        }
+        if (!cur) {
+          cur = { rows: [], add: false, del: false };
+          this.changes.push(cur);
+        }
+        cur.rows.push(row);
+        cur.add = cur.add || add;
+        cur.del = cur.del || del;
+      }
+    }
+    this.layoutRuler();
+    this.updateNav();
+  }
+
+  /** Top and bottom of a change, in the scrolling body's coordinates. */
+  changeSpan(c) {
+    const base = this.body.getBoundingClientRect().top - this.body.scrollTop;
+    const first = c.rows[0].getBoundingClientRect();
+    const last = c.rows[c.rows.length - 1].getBoundingClientRect();
+    return { top: first.top - base, bottom: last.bottom - base };
+  }
+
+  layoutRuler() {
+    const r = this.ruler;
+    clear(r);
+    this.spans = [];
+    r.hidden = this.mode !== 'diff' || !this.changes.length;
+    if (r.hidden || !this.body.isConnected) return;
+    const total = Math.max(1, this.body.scrollHeight);
+    const height = r.clientHeight;
+    this.spans = this.changes.map((c) => this.changeSpan(c));
+    this.spans.forEach((sp, i) => {
+      const c = this.changes[i];
+      const kind = c.add && c.del ? 'mod' : c.add ? 'add' : 'del';
+      r.appendChild(h('span', {
+        class: ['cr-mark', kind],
+        dataset: { i: String(i) },
+        style: { top: `${(sp.top / total) * height}px`, height: `${Math.max(4, ((sp.bottom - sp.top) / total) * height)}px` },
+      }));
+    });
+    this.viewBox = h('span', { class: 'cr-view' });
+    r.appendChild(this.viewBox);
+    this.onScroll();
+  }
+
+  onScroll() {
+    if (this.scrollFrame) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = 0;
+      const b = this.body;
+      if (this.viewBox && !this.ruler.hidden) {
+        const total = Math.max(1, b.scrollHeight);
+        const height = this.ruler.clientHeight;
+        this.viewBox.style.top = `${(b.scrollTop / total) * height}px`;
+        this.viewBox.style.height = `${Math.max(6, (b.clientHeight / total) * height)}px`;
+      }
+      this.updateNav();
+    });
+  }
+
+  /** Where "here" is: a quarter of the way down the visible diff, where a jump puts a change. */
+  anchorY() {
+    return this.body.scrollTop + this.body.clientHeight * 0.25;
+  }
+
+  updateNav() {
+    const nav = this.nav;
+    if (!nav) return;
+    const n = this.changes.length;
+    nav.group.hidden = !n;
+    if (!n) return;
+    const spans = this.spans && this.spans.length === n ? this.spans : this.changes.map((c) => this.changeSpan(c));
+    const y = this.anchorY();
+    let cur = -1;
+    spans.forEach((sp, i) => {
+      if (sp.top <= y + 2) cur = i;
+    });
+    nav.count.textContent = cur < 0 ? `${n} change${n === 1 ? '' : 's'}` : `${cur + 1} of ${n}`;
+    nav.prev.disabled = !spans.some((sp) => sp.top < y - 2);
+    nav.next.disabled = !spans.some((sp) => sp.top > y + 2);
+  }
+
+  /** Jump to the next (1) or previous (-1) change from where the view is. */
+  gotoChange(dir) {
+    if (this.mode !== 'diff' || !this.changes.length) return;
+    const spans = this.changes.map((c) => this.changeSpan(c));
+    const y = this.anchorY();
+    let target = -1;
+    if (dir > 0) target = spans.findIndex((sp) => sp.top > y + 2);
+    else spans.forEach((sp, i) => {
+      if (sp.top < y - 2) target = i;
+    });
+    if (target >= 0) this.scrollToChange(target);
+  }
+
+  scrollToChange(i, { smooth = true } = {}) {
+    const c = this.changes[i];
+    if (!c) return;
+    const sp = this.changeSpan(c);
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.body.scrollTo({ top: Math.max(0, sp.top - this.body.clientHeight * 0.25), behavior: smooth && !reduce ? 'smooth' : 'auto' });
+    for (const row of c.rows) {
+      row.classList.remove('flash');
+      void row.offsetWidth;
+      row.classList.add('flash');
+    }
+    clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => c.rows.forEach((row) => row.classList.remove('flash')), 1300);
+    this.onScroll();
+  }
+
+  onRuler(e) {
+    e.preventDefault();
+    const mark = e.target.closest('.cr-mark');
+    if (mark) {
+      this.scrollToChange(Number(mark.dataset.i));
+      return;
+    }
+    const r = this.ruler.getBoundingClientRect();
+    const frac = (e.clientY - r.top) / r.height;
+    this.body.scrollTo({ top: frac * this.body.scrollHeight - this.body.clientHeight / 2 });
   }
 
   canStage() {

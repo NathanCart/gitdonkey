@@ -1,13 +1,13 @@
 {
   "name": "gitdonkey",
   "productName": "GitDonkey",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "A free, open-source desktop Git client: commit graph, staging, merges and conflict resolution in a patched-modular-synth skin.",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/unit/*.test.*\"",
-    "test:e2e": "node test/e2e/run.js && node test/e2e/updates.js && node test/e2e/themes.js && node test/e2e/donkey.js && node test/e2e/conflicts.js",
+    "test:e2e": "node test/e2e/run.js && node test/e2e/updates.js && node test/e2e/themes.js && node test/e2e/donkey.js && node test/e2e/conflicts.js && node test/e2e/diffnav.js",
     "dist": "electron-packager . GitDonkey --platform=darwin --arch=arm64 --out=dist --overwrite --icon=assets/icon --app-bundle-id=dev.gitdonkey.app --ignore=^/test --ignore=^/dist --ignore=^/\\.impeccable --ignore=^/scripts --ignore=^/demo --ignore=\\.impeccable --ignore=^/PRODUCT\\.md --ignore=^/assets/brand-sheet\\.png",
     "brand": "electron scripts/build-brand.js",
     "dist:win": "electron-builder --win nsis --x64 --publish never",
